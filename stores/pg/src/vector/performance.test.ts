@@ -73,7 +73,7 @@ describe('PostgreSQL Vector Index Performance', () => {
   const testConfigs = {
     dimensions: [64, 384, 1024],
     sizes: [100, 1000, 10000],
-    kValues: [10, 25, 50, 75, 100], // Added intermediate k values
+    kValues: [10, 25, 50, 75, 100],
     indexConfigs: [
       // Test auto-configuration (undefined lists = use sqrt(N))
       // { type: 'ivfflat' },
@@ -265,10 +265,25 @@ describe('PostgreSQL Vector Index Performance', () => {
   }
 });
 
-const analyzeResults = (results: TestResult[]) => {
-  const byDimension = groupBy(results, 'dimension');
+const formatTable = (data: any[], columns: string[]) => {
+  // Calculate max width for each column including header
+  const colWidths = columns.map(col => Math.max(col.length, ...data.map(row => row[col].toString().length)));
 
-  console.log('Recall Analysis by Dataset Size and K:');
+  // Create the table components
+  const topBorder = '┌' + colWidths.map(w => '─'.repeat(w)).join('┬') + '┐';
+  const headerSeparator = '├' + colWidths.map(w => '─'.repeat(w)).join('┼') + '┤';
+  const bottomBorder = '└' + colWidths.map(w => '─'.repeat(w)).join('┴') + '┘';
+
+  // Format header and rows with proper borders
+  const header = '│' + columns.map((col, i) => col.padEnd(colWidths[i])).join('│') + '│';
+  const rows = data.map(row => '│' + columns.map((col, i) => row[col].toString().padEnd(colWidths[i])).join('│') + '│');
+
+  return [topBorder, header, headerSeparator, ...rows, bottomBorder].join('\n');
+};
+
+const analyzeResults = (results: TestResult[]) => {
+  // Keep the explanations at the top
+  console.log('\nRecall Analysis by Dataset Size and K:');
   console.log('- Dataset Size: Number of vectors in the dataset');
   console.log('- K: Number of nearest neighbors requested');
   console.log('- Min Recall: Lowest recall score across all test queries (1.0 = perfect match)');
@@ -277,7 +292,7 @@ const analyzeResults = (results: TestResult[]) => {
   console.log('- Lists: Number of IVF lists used in the index');
   console.log('- Vectors/List: Average number of vectors per IVF list');
 
-  console.log('Latency Analysis by Dataset Size and K:');
+  console.log('\nLatency Analysis by Dataset Size and K:');
   console.log('- Dataset Size: Number of vectors in the dataset');
   console.log('- K: Number of nearest neighbors requested');
   console.log('- P50 (ms): Median query time in milliseconds');
@@ -285,15 +300,17 @@ const analyzeResults = (results: TestResult[]) => {
   console.log('- Lists: Number of IVF lists used in the index');
   console.log('- Vectors/List: Average number of vectors per IVF list');
 
-  console.log('Clustering Analysis by Dataset Size:');
+  console.log('\nClustering Analysis by Dataset Size:');
   console.log('- Dataset Size: Number of vectors in the dataset');
   console.log('- Vectors/List: Average number of vectors per IVF list');
   console.log('- Recommended Lists: Square root of dataset size (common heuristic)');
   console.log('- Actual Lists: Number of IVF lists used in the index');
   console.log('- Efficiency: Ratio of recommended to actual lists (closer to 1.0 is better)');
 
+  const byDimension = groupBy(results, 'dimension');
+
   Object.entries(byDimension).forEach(([dimension, dimensionResults]) => {
-    console.log(`=== Analysis for ${dimension} dimensions ===`);
+    console.log(`\n=== Analysis for ${dimension} dimensions ===\n`);
 
     // Group by size and k for recall analysis
     const recalls = dimensionResults
@@ -308,23 +325,23 @@ const analyzeResults = (results: TestResult[]) => {
       }));
 
     console.log('Recall Analysis by Dataset Size and K:');
-    console.table(
-      Object.values(
-        groupBy(
-          recalls,
-          r => `${r.size}-${r.k}`,
-          result => ({
-            'Dataset Size': result[0].size,
-            K: result[0].k,
-            'Min Recall': result[0].minRecall.toFixed(3),
-            'Avg Recall': mean(result.map(r => r.recall)).toFixed(3),
-            'Max Recall': result[0].maxRecall.toFixed(3),
-            Lists: result[0].lists,
-            'Vectors/List': Math.round(result[0].size / result[0].lists),
-          }),
-        ),
+    const recallColumns = ['Dataset Size', 'K', 'Min Recall', 'Avg Recall', 'Max Recall', 'Lists', 'Vectors/List'];
+    const recallData = Object.values(
+      groupBy(
+        recalls,
+        r => `${r.size}-${r.k}`,
+        result => ({
+          'Dataset Size': result[0].size,
+          K: result[0].k,
+          'Min Recall': result[0].minRecall.toFixed(3),
+          'Avg Recall': mean(result.map(r => r.recall)).toFixed(3),
+          'Max Recall': result[0].maxRecall.toFixed(3),
+          Lists: result[0].lists,
+          'Vectors/List': Math.round(result[0].size / result[0].lists),
+        }),
       ),
     );
+    console.log(formatTable(recallData, recallColumns));
 
     // Similar fix for latency analysis
     const latencies = dimensionResults
@@ -337,23 +354,22 @@ const analyzeResults = (results: TestResult[]) => {
         p95: r.metrics.latency!.p95,
       }));
 
-    console.log('Latency Analysis by Dataset Size and K:');
-    console.table(
-      Object.values(
-        groupBy(
-          latencies,
-          r => `${r.size}-${r.k}`,
-          result => ({
-            'Dataset Size': result[0].size,
-            K: result[0].k,
-            'P50 (ms)': result[0].p50.toFixed(2),
-            'P95 (ms)': result[0].p95.toFixed(2),
-            Lists: result[0].lists,
-            'Vectors/List': Math.round(result[0].size / result[0].lists),
-          }),
-        ),
+    const latencyColumns = ['Dataset Size', 'K', 'P50 (ms)', 'P95 (ms)', 'Lists', 'Vectors/List'];
+    const latencyData = Object.values(
+      groupBy(
+        latencies,
+        r => `${r.size}-${r.k}`,
+        result => ({
+          'Dataset Size': result[0].size,
+          K: result[0].k,
+          'P50 (ms)': result[0].p50.toFixed(2),
+          'P95 (ms)': result[0].p95.toFixed(2),
+          Lists: result[0].lists,
+          'Vectors/List': Math.round(result[0].size / result[0].lists),
+        }),
       ),
     );
+    console.log(formatTable(latencyData, latencyColumns));
 
     console.log('Clustering Analysis by Dataset Size:');
 
@@ -366,21 +382,21 @@ const analyzeResults = (results: TestResult[]) => {
         actualLists: r.metrics.clustering!.numLists,
       }));
 
-    console.table(
-      Object.values(
-        groupBy(
-          clustering,
-          r => r.size.toString(),
-          result => ({
-            'Dataset Size': result[0].size,
-            'Vectors/List': Math.round(result[0].vectorsPerList),
-            'Recommended Lists': result[0].recommendedLists,
-            'Actual Lists': result[0].actualLists,
-            Efficiency: (result[0].recommendedLists / result[0].actualLists).toFixed(2),
-          }),
-        ),
+    const clusteringColumns = ['Dataset Size', 'Vectors/List', 'Recommended Lists', 'Actual Lists', 'Efficiency'];
+    const clusteringData = Object.values(
+      groupBy(
+        clustering,
+        r => r.size.toString(),
+        result => ({
+          'Dataset Size': result[0].size,
+          'Vectors/List': Math.round(result[0].vectorsPerList),
+          'Recommended Lists': result[0].recommendedLists,
+          'Actual Lists': result[0].actualLists,
+          Efficiency: (result[0].recommendedLists / result[0].actualLists).toFixed(2),
+        }),
       ),
     );
+    console.log(formatTable(clusteringData, clusteringColumns));
   });
 };
 
