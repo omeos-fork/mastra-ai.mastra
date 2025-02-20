@@ -183,7 +183,6 @@ export class Workflow<
   createRun(): WorkflowResultReturn<TTriggerSchema> {
     const run = new WorkflowInstance({
       logger: this.logger,
-      telemetry: this.#mastra?.telemetry,
       name: this.name,
       mastra: this.#mastra,
       retryConfig: this.#retryConfig,

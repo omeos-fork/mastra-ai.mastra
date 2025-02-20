@@ -15,7 +15,6 @@ import type { z } from 'zod';
 
 import type { IAction, MastraPrimitives } from '../action';
 import type { Logger } from '../logger';
-import type { Telemetry } from '../telemetry';
 
 import { Step } from './step';
 import type {
@@ -63,7 +62,6 @@ export class WorkflowInstance<TSteps extends Step<any, any, any>[] = any, TTrigg
   #machine!: ReturnType<typeof this.initializeMachine>;
 
   logger: Logger;
-  telemetry?: Telemetry;
 
   #steps: Record<string, IAction<any, any, any, any>> = {};
   #stepGraph: StepGraph;
@@ -81,7 +79,6 @@ export class WorkflowInstance<TSteps extends Step<any, any, any>[] = any, TTrigg
   constructor({
     name,
     logger,
-    telemetry,
     steps,
     runId,
     retryConfig,
@@ -93,7 +90,6 @@ export class WorkflowInstance<TSteps extends Step<any, any, any>[] = any, TTrigg
   }: {
     name: string;
     logger: Logger;
-    telemetry?: Telemetry;
     steps: Record<string, IAction<any, any, any, any>>;
     mastra?: MastraPrimitives;
     retryConfig?: RetryConfig;
@@ -105,7 +101,6 @@ export class WorkflowInstance<TSteps extends Step<any, any, any>[] = any, TTrigg
   }) {
     this.name = name;
     this.logger = logger;
-    this.telemetry = telemetry;
 
     this.#steps = steps;
     this.#stepGraph = stepGraph;
@@ -155,7 +150,7 @@ export class WorkflowInstance<TSteps extends Step<any, any, any>[] = any, TTrigg
       this.logger.debug(`Workflow snapshot received`, { runId: this.runId, snapshot });
     }
 
-    this.#executionSpan = this.telemetry?.tracer.startSpan(`workflow.${this.name}.execute`, {
+    this.#executionSpan = this.#mastra?.telemetry?.tracer.startSpan(`workflow.${this.name}.execute`, {
       attributes: { componentName: this.name, runId: this.runId },
     });
 
