@@ -1,16 +1,7 @@
 import type { Span } from '@opentelemetry/api';
 import { get } from 'radash';
 import sift from 'sift';
-import {
-  createMachine,
-  createActor,
-  StateMachine,
-  type Snapshot,
-  setup,
-  assign,
-  type MachineContext,
-  fromPromise,
-} from 'xstate';
+import { createActor, type Snapshot, setup, assign, type MachineContext, fromPromise } from 'xstate';
 import type { z } from 'zod';
 
 import type { IAction, MastraPrimitives } from '../action';
