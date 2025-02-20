@@ -1,4 +1,4 @@
-import { type LanguageModel } from '@mastra/core/llm';
+import type { LanguageModel } from '@mastra/core/llm';
 import { z } from 'zod';
 
 import { MastraAgentJudge } from '../../judge';
@@ -26,8 +26,8 @@ export class ToxicityJudge extends MastraAgentJudge {
     return result.object.verdicts;
   }
 
-  async getReason({ score, toxics }: { score: number; toxics: string[] }): Promise<string> {
-    const prompt = getReasonPrompt({ score, toxics });
+  async getReason(args: { score: number; toxics: string[] }): Promise<string> {
+    const prompt = getReasonPrompt(args);
     const result = await this.agent.generate(prompt, {
       output: z.object({
         reason: z.string(),

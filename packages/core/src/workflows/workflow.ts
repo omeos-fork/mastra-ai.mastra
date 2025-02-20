@@ -2,10 +2,10 @@ import { trace, context as otlpContext } from '@opentelemetry/api';
 import type { Span } from '@opentelemetry/api';
 import { z } from 'zod';
 
-import { type IAction, type MastraPrimitives } from '../action';
+import type { IAction, MastraPrimitives } from '../action';
 import { MastraBase } from '../base';
 
-import { Step } from './step';
+import type { Step } from './step';
 import type {
   ActionContext,
   RetryConfig,

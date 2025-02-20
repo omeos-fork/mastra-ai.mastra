@@ -1,5 +1,5 @@
 import { FileService } from '@mastra/deployer';
-import { ChildProcess } from 'child_process';
+import type { ChildProcess } from 'child_process';
 import { execa } from 'execa';
 import { join } from 'path';
 
@@ -15,9 +15,10 @@ const startServer = async (dotMastraPath: string, port: number, env: Map<string,
     // Restart server
     logger.info('[Mastra Dev] - Starting server...');
 
+    const instrumentation = import.meta.resolve('@opentelemetry/instrumentation/hook.mjs');
     currentServerProcess = execa(
       'node',
-      ['--import=./instrumentation.mjs', '--import=@opentelemetry/instrumentation/hook.mjs', 'index.mjs'],
+      ['--import=./instrumentation.mjs', `--import=${instrumentation}`, 'index.mjs'],
       {
         cwd: dotMastraPath,
         env: {
@@ -84,12 +85,12 @@ async function rebundleAndRestart(dotMastraPath: string, port: number, bundler: 
     // If current server process is running, stop it
     if (currentServerProcess) {
       logger.debug('Stopping current server...');
-      currentServerProcess.kill();
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      currentServerProcess.kill('SIGKILL');
     }
 
     const env = await bundler.loadEnvVars();
-    await startServer(dotMastraPath, port, env);
+
+    await startServer(join(dotMastraPath, 'output'), port, env);
   } finally {
     isRestarting = false;
   }
@@ -116,6 +117,7 @@ export async function dev({ port, dir, root }: { dir?: string; root?: string; po
   watcher.on('event', event => {
     if (event.code === 'BUNDLE_END') {
       logger.info('[Mastra Dev] - Bundling finished, restarting server...');
+      // eslint-disable-next-line @typescript-eslint/no-floating-promises
       rebundleAndRestart(dotMastraPath, port, bundler);
     }
   });
@@ -125,6 +127,8 @@ export async function dev({ port, dir, root }: { dir?: string; root?: string; po
     if (currentServerProcess) {
       currentServerProcess.kill();
     }
+
+    // eslint-disable-next-line @typescript-eslint/no-floating-promises
     watcher.close();
     process.exit(0);
   });
