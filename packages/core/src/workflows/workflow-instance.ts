@@ -75,6 +75,8 @@ export class WorkflowInstance<TSteps extends Step<any, any, any>[] = any, TTrigg
   #actor: ReturnType<typeof createActor<ReturnType<typeof this.initializeMachine>>> | null = null;
   #executionSpan: Span | undefined;
 
+  #onStepTransition: Set<(state: WorkflowRunState) => void | Promise<void>> = new Set();
+
   constructor({
     name,
     logger,
@@ -85,6 +87,7 @@ export class WorkflowInstance<TSteps extends Step<any, any, any>[] = any, TTrigg
     mastra,
     stepGraph,
     stepSubscriberGraph,
+    onStepTransition,
   }: {
     name: string;
     logger: Logger;
@@ -95,6 +98,7 @@ export class WorkflowInstance<TSteps extends Step<any, any, any>[] = any, TTrigg
     runId?: string;
     stepGraph: StepGraph;
     stepSubscriberGraph: Record<string, StepGraph>;
+    onStepTransition: Set<(state: WorkflowRunState) => void | Promise<void>>;
   }) {
     this.name = name;
     this.logger = logger;
@@ -108,6 +112,7 @@ export class WorkflowInstance<TSteps extends Step<any, any, any>[] = any, TTrigg
     this.#mastra = mastra;
 
     this.#runId = runId ?? crypto.randomUUID();
+    this.#onStepTransition = onStepTransition;
 
     this.initializeMachine();
   }
@@ -117,7 +122,6 @@ export class WorkflowInstance<TSteps extends Step<any, any, any>[] = any, TTrigg
   }
 
   async start({ triggerData }: { triggerData?: z.infer<TTriggerSchema> } = {}) {
-    console.log('RUN START', this.runId);
     const results = await this.execute({ triggerData });
     return {
       ...results,
@@ -208,18 +212,17 @@ export class WorkflowInstance<TSteps extends Step<any, any, any>[] = any, TTrigg
 
       const suspendedPaths: Set<string> = new Set();
       this.#actor.subscribe(async state => {
-        // if (this.#onStepTransition) {
-        //   console.log('GOT SUSPENDED VAL', state.toJSON());
-        //   this.#onStepTransition.forEach(onTransition => {
-        //     onTransition({
-        //       runId: this.#runId,
-        //       value: state.value as Record<string, string>,
-        //       context: state.context as WorkflowContext,
-        //       activePaths: this.#getActivePathsAndStatus(state.value as Record<string, string>),
-        //       timestamp: Date.now(),
-        //     });
-        //   });
-        // }
+        if (this.#onStepTransition) {
+          this.#onStepTransition.forEach(onTransition => {
+            onTransition({
+              runId: this.runId,
+              value: state.value as Record<string, string>,
+              context: state.context as WorkflowContext,
+              activePaths: getActivePathsAndStatus(state.value as Record<string, string>),
+              timestamp: Date.now(),
+            });
+          });
+        }
         getSuspendedPaths({
           value: state.value as Record<string, string>,
           path: '',

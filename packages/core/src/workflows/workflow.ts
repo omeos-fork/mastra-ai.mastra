@@ -191,6 +191,8 @@ export class Workflow<
       steps: this.#steps,
       stepGraph: this.#stepGraph,
       stepSubscriberGraph: this.#stepSubscriberGraph,
+
+      onStepTransition: this.#onStepTransition,
     });
     this.#run = run;
     return run;
