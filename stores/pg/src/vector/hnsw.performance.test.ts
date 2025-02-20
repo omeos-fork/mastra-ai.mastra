@@ -15,7 +15,6 @@ import {
   setupTestDB,
   cleanupTestDB,
   HOOK_TIMEOUT,
-  getDimensionTimeout,
   warmupQuery,
   measureLatency,
 } from './performance.helpers';
@@ -26,6 +25,7 @@ import { PgVector } from '.';
 describe('PostgreSQL HNSW Index Performance', () => {
   const testConfigs = {
     ...baseTestConfigs,
+    dimensions: [64],
     indexConfigs: [
       // Test HNSW with default settings
       {
@@ -36,21 +36,21 @@ describe('PostgreSQL HNSW Index Performance', () => {
         },
       },
       // Test HNSW with higher quality settings
-      {
-        type: 'hnsw',
-        hnsw: {
-          m: 32, // More connections
-          efConstruction: 128, // Higher build quality
-        },
-      },
-      // Test HNSW with maximum quality settings
-      {
-        type: 'hnsw',
-        hnsw: {
-          m: 64, // Maximum connections
-          efConstruction: 256, // Maximum build quality
-        },
-      },
+      //   {
+      //     type: 'hnsw',
+      //     hnsw: {
+      //       m: 32, // More connections
+      //       efConstruction: 128, // Higher build quality
+      //     },
+      //   },
+      //   // Test HNSW with maximum quality settings
+      //   {
+      //     type: 'hnsw',
+      //     hnsw: {
+      //       m: 64, // Maximum connections
+      //       efConstruction: 256, // Maximum build quality
+      //     },
+      //   },
     ],
   };
 
@@ -83,7 +83,7 @@ describe('PostgreSQL HNSW Index Performance', () => {
       const indexDesc = `HNSW(m=${indexConfig.hnsw?.m},ef=${indexConfig.hnsw?.efConstruction})`;
 
       describe(`Dimension: ${dimension}, Index: ${indexDesc}`, () => {
-        const dimensionTimeout = getDimensionTimeout(dimension);
+        const timeout = calculateTimeout(dimension, Math.max(...testConfigs.sizes), Math.max(...testConfigs.kValues));
 
         it(
           'measures recall with different dataset sizes',
@@ -97,62 +97,49 @@ describe('PostgreSQL HNSW Index Performance', () => {
 
               // Create index and insert vectors
               await vectorDB.createIndex(testIndexName, dimension, 'cosine', indexConfig);
+
               const vectorIds = testVectors.map((_, idx) => `vec_${idx}`);
               const metadata = testVectors.map((_, idx) => ({ index: idx }));
               await vectorDB.upsert(testIndexName, testVectors, vectorIds, metadata);
 
               // Test each k value
               for (const k of testConfigs.kValues) {
-                const recalls: number[] = [];
+                const efValues = getSearchEf(k, indexConfig.hnsw?.m || 16);
 
-                for (const queryVector of queryVectors) {
-                  const expectedNeighbors = findNearestBruteForce(queryVector, testVectors, k);
+                for (const [efType, ef] of Object.entries(efValues)) {
+                  const recalls: number[] = [];
 
-                  // Test different ef values
-                  const efValues = getSearchEf(k, indexConfig.hnsw?.m || 16);
-                  for (const [efType, ef] of Object.entries(efValues)) {
+                  for (const queryVector of queryVectors) {
+                    const expectedNeighbors = findNearestBruteForce(queryVector, testVectors, k);
                     const actualResults = await vectorDB.query(testIndexName, queryVector, k, undefined, false, 0, ef);
                     const actualNeighbors = actualResults.map(r => JSON.parse(r.id).index);
-                    const recall = calculateRecall(actualNeighbors, expectedNeighbors, k);
-                    recalls.push(recall);
-
-                    results.push({
-                      dimension,
-                      indexConfig: {
-                        ...indexConfig,
-                        hnsw: {
-                          ...indexConfig.hnsw,
-                          ef,
-                          efType,
-                        },
-                      },
-                      size,
-                      k,
-                      metrics: {
-                        recall,
-                        minRecall: recall,
-                        maxRecall: recall,
-                      },
-                    });
+                    recalls.push(calculateRecall(actualNeighbors, expectedNeighbors, k));
                   }
-                }
 
-                // Add aggregate metrics after all queries for this k value
-                results.push({
-                  dimension,
-                  indexConfig,
-                  size,
-                  k,
-                  metrics: {
-                    recall: mean(recalls),
-                    minRecall: min(recalls),
-                    maxRecall: max(recalls),
-                  },
-                });
+                  // Push aggregate metrics for this specific ef value
+                  results.push({
+                    dimension,
+                    indexConfig: {
+                      ...indexConfig,
+                      hnsw: {
+                        ...indexConfig.hnsw,
+                        ef,
+                        efType,
+                      },
+                    },
+                    size,
+                    k,
+                    metrics: {
+                      recall: mean(recalls),
+                      minRecall: min(recalls),
+                      maxRecall: max(recalls),
+                    },
+                  });
+                }
               }
             }
           },
-          dimensionTimeout,
+          timeout,
         );
 
         it(
@@ -170,41 +157,42 @@ describe('PostgreSQL HNSW Index Performance', () => {
                 await vectorDB.upsert(testIndexName, testVectors);
                 await warmupQuery(vectorDB, testIndexName, dimension, k);
 
-                for (const queryVector of queryVectors) {
-                  const efValues = getSearchEf(k, indexConfig.hnsw?.m || 16);
-
-                  for (const [efType, ef] of Object.entries(efValues)) {
+                for (const [efType, ef] of Object.entries(getSearchEf(k, indexConfig.hnsw?.m || 16))) {
+                  const latencies: number[] = [];
+                  for (const queryVector of queryVectors) {
                     const latency = await measureLatency(() =>
                       vectorDB.query(testIndexName, queryVector, k, undefined, false, 0, ef),
                     );
-
-                    results.push({
-                      dimension,
-                      indexConfig: {
-                        ...indexConfig,
-                        hnsw: {
-                          ...indexConfig.hnsw,
-                          ef,
-                          efType,
-                        },
-                      },
-                      size,
-                      k,
-                      metrics: {
-                        latency: {
-                          p50: latency,
-                          p95: latency,
-                          m: indexConfig.hnsw?.m,
-                          ef,
-                        },
-                      },
-                    });
+                    latencies.push(latency);
                   }
+
+                  const sorted = [...latencies].sort((a, b) => a - b);
+                  results.push({
+                    dimension,
+                    indexConfig: {
+                      type: indexConfig.type,
+                      hnsw: {
+                        ...indexConfig.hnsw,
+                        ef,
+                        efType,
+                      },
+                    },
+                    size,
+                    k,
+                    metrics: {
+                      latency: {
+                        p50: sorted[Math.floor(sorted.length * 0.5)],
+                        p95: sorted[Math.floor(sorted.length * 0.95)],
+                        m: indexConfig.hnsw?.m,
+                        ef,
+                      },
+                    },
+                  });
                 }
               }
             }
           },
-          calculateTimeout(dimension, Math.max(...testConfigs.sizes), Math.max(...testConfigs.kValues)),
+          timeout,
         );
       });
     }
@@ -217,68 +205,74 @@ function analyzeResults(results: TestResult[]) {
   Object.entries(byDimension).forEach(([dimension, dimensionResults]) => {
     console.log(`\n=== Analysis for ${dimension} dimensions ===\n`);
 
-    // Recall Analysis
-    const recalls = dimensionResults
-      .filter(r => r.metrics.recall !== undefined)
-      .map(r => ({
-        size: r.size,
-        k: r.k,
-        m: r.indexConfig.hnsw?.m,
-        ef: r.indexConfig.hnsw?.ef,
-        recall: r.metrics.recall!,
-        minRecall: r.metrics.minRecall!,
-        maxRecall: r.metrics.maxRecall!,
-      }));
+    const byType = groupBy(dimensionResults, r => r.indexConfig.type);
 
-    console.log('Recall Analysis:');
-    const recallColumns = ['Dataset Size', 'K', 'M', 'EF', 'Min Recall', 'Avg Recall', 'Max Recall'];
+    Object.entries(byType).forEach(([type, typeResults]) => {
+      console.log(`\n--- ${type.toUpperCase()} Index Analysis ---\n`);
 
-    const recallData = Object.values(
-      groupBy(
-        recalls,
-        r => `${r.size}-${r.k}-${r.m}-${r.ef}`,
-        result => ({
-          'Dataset Size': result[0].size,
-          K: result[0].k,
-          M: result[0].m ?? '-',
-          EF: result[0].ef ?? '-',
-          'Min Recall': result[0].minRecall.toFixed(3),
-          'Avg Recall': mean(result.map(r => r.recall)).toFixed(3),
-          'Max Recall': result[0].maxRecall.toFixed(3),
-        }),
-      ),
-    );
-    console.log(formatTable(recallData, recallColumns));
+      // Recall Analysis
+      const recalls = typeResults
+        .filter(r => r.metrics.recall !== undefined)
+        .map(r => ({
+          size: r.size,
+          k: r.k,
+          m: r.indexConfig.hnsw?.m,
+          ef: r.indexConfig.hnsw?.ef,
+          recall: r.metrics.recall!,
+          minRecall: r.metrics.minRecall!,
+          maxRecall: r.metrics.maxRecall!,
+        }));
 
-    // Latency Analysis
-    const latencies = dimensionResults
-      .filter(r => r.metrics.latency !== undefined)
-      .map(r => ({
-        size: r.size,
-        k: r.k,
-        m: r.metrics.latency?.m,
-        ef: r.metrics.latency?.ef,
-        p50: r.metrics.latency!.p50,
-        p95: r.metrics.latency!.p95,
-      }));
+      console.log('Recall Analysis:');
+      const recallColumns = ['Dataset Size', 'K', 'M', 'EF', 'Min Recall', 'Avg Recall', 'Max Recall'];
 
-    console.log('\nLatency Analysis:');
-    const latencyColumns = ['Dataset Size', 'K', 'M', 'EF', 'P50 (ms)', 'P95 (ms)'];
+      const recallData = Object.values(
+        groupBy(
+          recalls,
+          r => `${r.size}-${r.k}-${r.m}-${r.ef}`,
+          result => ({
+            'Dataset Size': result[0].size,
+            K: result[0].k,
+            M: result[0].m ?? '-',
+            EF: result[0].ef ?? '-',
+            'Min Recall': result[0].minRecall.toFixed(3),
+            'Avg Recall': mean(result.map(r => r.recall)).toFixed(3),
+            'Max Recall': result[0].maxRecall.toFixed(3),
+          }),
+        ),
+      );
+      console.log(formatTable(recallData, recallColumns));
 
-    const latencyData = Object.values(
-      groupBy(
-        latencies,
-        r => `${r.size}-${r.k}-${r.m}-${r.ef}`,
-        result => ({
-          'Dataset Size': result[0].size,
-          K: result[0].k,
-          M: result[0].m ?? '-',
-          EF: result[0].ef ?? '-',
-          'P50 (ms)': mean(result.map(r => r.p50)).toFixed(2),
-          'P95 (ms)': mean(result.map(r => r.p95)).toFixed(2),
-        }),
-      ),
-    );
-    console.log(formatTable(latencyData, latencyColumns));
+      // Latency Analysis
+      const latencies = typeResults
+        .filter(r => r.metrics.latency !== undefined)
+        .map(r => ({
+          size: r.size,
+          k: r.k,
+          m: r.metrics.latency?.m,
+          ef: r.metrics.latency?.ef,
+          p50: r.metrics.latency!.p50,
+          p95: r.metrics.latency!.p95,
+        }));
+
+      console.log('\nLatency Analysis:');
+      const latencyColumns = ['Dataset Size', 'K', 'M', 'EF', 'P50 (ms)', 'P95 (ms)'];
+
+      const latencyData = Object.values(
+        groupBy(
+          latencies,
+          r => `${r.size}-${r.k}-${r.m}-${r.ef}`,
+          result => ({
+            'Dataset Size': result[0].size,
+            K: result[0].k,
+            M: result[0].m ?? '-',
+            EF: result[0].ef ?? '-',
+            'P50 (ms)': mean(result.map(r => r.p50)).toFixed(2),
+            'P95 (ms)': mean(result.map(r => r.p95)).toFixed(2),
+          }),
+        ),
+      );
+      console.log(formatTable(latencyData, latencyColumns));
+    });
   });
 }

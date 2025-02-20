@@ -151,15 +151,11 @@ export async function setupTestDB(indexName: string): Promise<PgVector> {
 }
 
 export async function cleanupTestDB(vectorDB: PgVector, indexName: string) {
-  await vectorDB.deleteIndex(testIndexName);
+  await vectorDB.deleteIndex(indexName);
   await vectorDB.pool.end();
 }
 
 export const HOOK_TIMEOUT = 600000;
-
-export function getDimensionTimeout(dimension: number) {
-  return dimension >= 1024 ? 120000 : 60000;
-}
 
 export async function warmupQuery(vectorDB: PgVector, indexName: string, dimension: number, k: number) {
   const warmupVector = generateRandomVectors(1, dimension)[0];

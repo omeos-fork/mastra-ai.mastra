@@ -15,13 +15,23 @@ import {
   setupTestDB,
   cleanupTestDB,
   HOOK_TIMEOUT,
-  getDimensionTimeout,
   warmupQuery,
   measureLatency,
 } from './performance.helpers';
 import { IndexConfig } from './types';
 
 import { PgVector } from '.';
+
+const getListCount = (result: TestResult): number | undefined => {
+  if (result.indexConfig.type !== 'ivfflat') return undefined;
+  if (result.metrics.latency?.lists) {
+    return result.metrics.latency.lists;
+  }
+  if (typeof result.indexConfig.ivf?.lists === 'function') {
+    return result.indexConfig.ivf.lists(result.size);
+  }
+  return result.indexConfig.ivf?.lists ?? Math.floor(Math.sqrt(result.size));
+};
 
 describe('PostgreSQL IVF Index Performance', () => {
   const testConfigs = {
@@ -58,17 +68,6 @@ describe('PostgreSQL IVF Index Performance', () => {
     analyzeResults(results);
   });
 
-  const getListCount = (result: TestResult): number | undefined => {
-    if (result.indexConfig.type !== 'ivfflat') return undefined;
-    if (result.metrics.latency?.lists) {
-      return result.metrics.latency.lists;
-    }
-    if (typeof result.indexConfig.ivf?.lists === 'function') {
-      return result.indexConfig.ivf.lists(result.size);
-    }
-    return result.indexConfig.ivf?.lists ?? Math.floor(Math.sqrt(result.size));
-  };
-
   for (const dimension of testConfigs.dimensions) {
     for (const indexConfig of testConfigs.indexConfigs) {
       const indexDesc =
@@ -81,7 +80,7 @@ describe('PostgreSQL IVF Index Performance', () => {
               : 'Flat';
 
       describe(`Dimension: ${dimension}, Index: ${indexDesc}`, () => {
-        const dimensionTimeout = getDimensionTimeout(dimension);
+        const timeout = calculateTimeout(dimension, Math.max(...testConfigs.sizes), Math.max(...testConfigs.kValues));
 
         it(
           'measures recall with different dataset sizes',
@@ -130,7 +129,7 @@ describe('PostgreSQL IVF Index Performance', () => {
               }
             }
           },
-          dimensionTimeout,
+          timeout,
         );
 
         it(
@@ -177,7 +176,7 @@ describe('PostgreSQL IVF Index Performance', () => {
               }
             }
           },
-          calculateTimeout(dimension, Math.max(...testConfigs.sizes), Math.max(...testConfigs.kValues)),
+          timeout,
         );
 
         it(
@@ -207,7 +206,7 @@ describe('PostgreSQL IVF Index Performance', () => {
               });
             }
           },
-          dimensionTimeout,
+          timeout,
         );
       });
     }
