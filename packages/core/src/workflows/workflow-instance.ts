@@ -549,17 +549,17 @@ export class WorkflowInstance<TSteps extends Step<any, any, any>[] = any, TTrigg
                 });
               }
 
-              if (this.#onStepTransition) {
-                this.#onStepTransition.forEach(onTransition => {
-                  onTransition({
-                    runId: this.runId,
-                    value: state.value as Record<string, string>,
-                    context: state.context as WorkflowContext,
-                    activePaths: getActivePathsAndStatus(state.value as Record<string, string>),
-                    timestamp: Date.now(),
-                  });
-                });
-              }
+              // if (this.#onStepTransition) {
+              //   this.#onStepTransition.forEach(onTransition => {
+              //     onTransition({
+              //       runId: this.runId,
+              //       value: state.value as Record<string, string>,
+              //       context: state.context as WorkflowContext,
+              //       activePaths: getActivePathsAndStatus(state.value as Record<string, string>),
+              //       timestamp: Date.now(),
+              //     });
+              //   });
+              // }
             });
           });
         },
