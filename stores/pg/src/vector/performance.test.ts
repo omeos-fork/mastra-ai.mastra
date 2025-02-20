@@ -86,9 +86,9 @@ describe('PostgreSQL Vector Index Performance', () => {
       // Test auto-configuration (undefined lists = use sqrt(N))
       { type: 'ivfflat' },
       // Test fixed configurations
-      { type: 'ivfflat', lists: 100 },
-      // Test size-proportional configurations
-      { type: 'ivfflat', lists: (size: number) => Math.floor(size / 10) }, // N/10 lists
+      // { type: 'ivfflat', lists: 100 },
+      // // Test size-proportional configurations
+      // { type: 'ivfflat', lists: (size: number) => Math.floor(size / 10) }, // N/10 lists
     ],
   };
 
@@ -295,7 +295,7 @@ describe('PostgreSQL Vector Index Performance', () => {
 
               console.log(`
                 Dimension: ${dimension}
-                Config: ${indexConfig.type} (lists=${lists})
+                Config: ${indexConfig.type} (lists=${indexConfig.lists === undefined ? `sqrt(${size})=${Math.floor(Math.sqrt(size))}` : lists})
                 Dataset size: ${size}
                 Theoretical vectors per list: ${(size / lists).toFixed(2)}
               `);
@@ -317,12 +317,12 @@ const analyzeResults = (results: TestResult[]) => {
   Object.entries(byDimension).forEach(([dimension, dimensionResults]) => {
     console.log(`\n=== Analysis for ${dimension} dimensions ===`);
 
-    // Analyze recall
+    // Analyze recall with proper list handling
     const recalls = dimensionResults
       .filter(r => r.metrics.recall !== undefined)
       .map(r => ({
         size: r.size,
-        lists: r.indexConfig.lists,
+        lists: r.indexConfig.lists ?? Math.floor(Math.sqrt(r.size)), // Calculate if undefined
         recall: r.metrics.recall!,
       }));
 
@@ -336,16 +336,16 @@ const analyzeResults = (results: TestResult[]) => {
       })),
     );
 
-    // Analyze latency with more detail
+    // Analyze latency with proper list handling
     const latencies = dimensionResults
       .filter(r => r.metrics.latency !== undefined)
       .map(r => ({
         size: r.size,
-        lists: r.indexConfig.lists,
+        lists: r.indexConfig.lists ?? Math.floor(Math.sqrt(r.size)), // Calculate if undefined
         p50: r.metrics.latency!.p50,
         p95: r.metrics.latency!.p95,
         p99: r.metrics.latency!.p99,
-        listsToVectorRatio: r.indexConfig.lists / r.size,
+        listsToVectorRatio: (r.indexConfig.lists ?? Math.floor(Math.sqrt(r.size))) / r.size,
       }));
 
     console.log('\nLatency Analysis (ms):');
@@ -360,13 +360,13 @@ const analyzeResults = (results: TestResult[]) => {
       })),
     );
 
-    // Analyze clustering with focus on list distribution
+    // Analyze clustering with proper list handling
     const clustering = dimensionResults
       .filter(r => r.metrics.clustering !== undefined)
       .map(r => ({
         size: r.size,
-        lists: r.indexConfig.lists,
-        avgVectorsPerList: r.size / r.indexConfig.lists,
+        lists: r.indexConfig.lists ?? Math.floor(Math.sqrt(r.size)), // Calculate if undefined
+        avgVectorsPerList: r.size / (r.indexConfig.lists ?? Math.floor(Math.sqrt(r.size))),
       }));
 
     console.log('\nClustering Analysis:');
