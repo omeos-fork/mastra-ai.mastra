@@ -186,47 +186,14 @@ export class PgVector extends MastraVector {
   ): Promise<void> {
     const client = await this.pool.connect();
     try {
+      await client.query(`DROP INDEX IF EXISTS ${indexName}_vector_idx`);
       // If type is 'flat', don't create an index
       if (indexConfig.type === 'flat') {
-        // Drop existing index if any
-        await client.query(`
-          DROP INDEX IF EXISTS ${indexName}_vector_idx
-        `);
         return;
       }
 
       const metricOp =
         metric === 'cosine' ? 'vector_cosine_ops' : metric === 'euclidean' ? 'vector_l2_ops' : 'vector_ip_ops';
-
-      // Drop existing index if any
-      await client.query(`
-        DROP INDEX IF EXISTS ${indexName}_vector_idx
-      `);
-
-      // For IVFFlat, calculate optimal lists if not provided
-      if (indexConfig.type !== 'hnsw') {
-        // Get row count to determine lists if not provided
-        const countResult = await client.query(`
-          SELECT COUNT(*) FROM ${indexName}
-        `);
-        const rowCount = parseInt(countResult.rows[0].count);
-
-        // Calculate optimal lists if not provided
-        if (!indexConfig.ivf?.lists) {
-          indexConfig = {
-            type: 'ivfflat',
-            ivf: {
-              lists: Math.max(
-                10, // Minimum lists
-                Math.min(
-                  1000, // Maximum lists
-                  Math.floor(Math.sqrt(rowCount)),
-                ),
-              ),
-            },
-          };
-        }
-      }
 
       // Build and execute index creation SQL
       let indexSQL: string;
@@ -247,7 +214,20 @@ export class PgVector extends MastraVector {
         `;
       } else {
         // ivfflat
-        const lists = indexConfig.ivf?.lists ?? 100;
+        // Get row count for dynamic list calculation
+        const countResult = await client.query(`SELECT COUNT(*) FROM ${indexName}`);
+        const rowCount = parseInt(countResult.rows[0].count);
+
+        // Calculate optimal lists if not provided
+        const lists =
+          indexConfig.ivf?.lists ??
+          Math.max(
+            10, // Minimum lists
+            Math.min(
+              1000, // Maximum lists
+              Math.floor(Math.sqrt(rowCount)),
+            ),
+          );
 
         indexSQL = `
           CREATE INDEX ${indexName}_vector_idx
