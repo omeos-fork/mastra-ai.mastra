@@ -97,3 +97,25 @@ export function getActivePathsAndStatus(value: Record<string, any>): Array<{
   traverse(value);
   return paths;
 }
+
+export function mergeChildValue(parent: Record<string, any>, child: Record<string, any>): Record<string, any> {
+  const traverse = (current: Record<string, any>) => {
+    const obj: Record<string, any> = {};
+    for (const [key, value] of Object.entries(current)) {
+      if (value === 'runningSubscribers') {
+        // Found child state
+        obj[key] = { ...child };
+      } else if (typeof value === 'string') {
+        // Found leaf state
+        obj[key] = value;
+      } else if (typeof value === 'object' && value !== null) {
+        // Continue traversing
+        obj[key] = traverse(value);
+      }
+    }
+
+    return obj;
+  };
+
+  return traverse(parent);
+}
