@@ -634,13 +634,11 @@ export class WorkflowInstance<TSteps extends Step<any, any, any>[] = any, TTrigg
       return;
     }
 
-    if (this.#mastra?.storage) {
-      await this.#mastra.storage.persistWorkflowSnapshot({
-        workflowName: this.name,
-        runId: this.runId,
-        snapshot: snapshotFromActor as unknown as WorkflowRunState,
-      });
-    }
+    await this.#mastra.storage.persistWorkflowSnapshot({
+      workflowName: this.name,
+      runId: this.runId,
+      snapshot: snapshotFromActor as unknown as WorkflowRunState,
+    });
 
     return this.runId;
   }
