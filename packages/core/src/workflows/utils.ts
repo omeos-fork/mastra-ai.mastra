@@ -22,3 +22,78 @@ export function getStepResult(result?: StepResult<any>) {
   if (result?.status === 'success') return result.output;
   return undefined;
 }
+
+export function getSuspendedPaths({
+  value,
+  path,
+  suspendedPaths,
+}: {
+  value: string | Record<string, string>;
+  path: string;
+  suspendedPaths: Set<string>;
+}) {
+  if (typeof value === 'string') {
+    if (value === 'suspended') {
+      suspendedPaths.add(path);
+    }
+  } else {
+    Object.keys(value).forEach(key =>
+      getSuspendedPaths({ value: value[key]!, path: path ? `${path}.${key}` : key, suspendedPaths }),
+    );
+  }
+}
+
+export function isFinalState(status: string): boolean {
+  return ['completed', 'failed'].includes(status);
+}
+
+export function recursivelyCheckForFinalState({
+  value,
+  suspendedPaths,
+  path,
+}: {
+  value: string | Record<string, string>;
+  suspendedPaths: Set<string>;
+  path: string;
+}): boolean {
+  if (typeof value === 'string') {
+    // if the value is a final state or it has previouslyreached a suspended state, return true
+    return isFinalState(value) || suspendedPaths.has(path);
+  }
+  return Object.keys(value).every(key =>
+    recursivelyCheckForFinalState({ value: value[key]!, suspendedPaths, path: path ? `${path}.${key}` : key }),
+  );
+}
+
+export function getActivePathsAndStatus(value: Record<string, any>): Array<{
+  stepPath: string[];
+  stepId: string;
+  status: string;
+}> {
+  const paths: Array<{
+    stepPath: string[];
+    stepId: string;
+    status: string;
+  }> = [];
+
+  const traverse = (current: Record<string, any>, path: string[] = []) => {
+    for (const [key, value] of Object.entries(current)) {
+      const currentPath = [...path, key];
+
+      if (typeof value === 'string') {
+        // Found a leaf state
+        paths.push({
+          stepPath: currentPath,
+          stepId: key,
+          status: value,
+        });
+      } else if (typeof value === 'object' && value !== null) {
+        // Continue traversing
+        traverse(value, currentPath);
+      }
+    }
+  };
+
+  traverse(value);
+  return paths;
+}
