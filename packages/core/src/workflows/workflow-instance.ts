@@ -76,6 +76,7 @@ export class WorkflowInstance<TSteps extends Step<any, any, any>[] = any, TTrigg
   #executionSpan: Span | undefined;
 
   #onStepTransition: Set<(state: WorkflowRunState) => void | Promise<void>> = new Set();
+  #onFinish?: () => void;
 
   constructor({
     name,
@@ -88,6 +89,7 @@ export class WorkflowInstance<TSteps extends Step<any, any, any>[] = any, TTrigg
     stepGraph,
     stepSubscriberGraph,
     onStepTransition,
+    onFinish,
   }: {
     name: string;
     logger: Logger;
@@ -99,6 +101,7 @@ export class WorkflowInstance<TSteps extends Step<any, any, any>[] = any, TTrigg
     stepGraph: StepGraph;
     stepSubscriberGraph: Record<string, StepGraph>;
     onStepTransition: Set<(state: WorkflowRunState) => void | Promise<void>>;
+    onFinish?: () => void;
   }) {
     this.name = name;
     this.logger = logger;
@@ -113,6 +116,7 @@ export class WorkflowInstance<TSteps extends Step<any, any, any>[] = any, TTrigg
 
     this.#runId = runId ?? crypto.randomUUID();
     this.#onStepTransition = onStepTransition;
+    this.#onFinish = onFinish;
 
     this.initializeMachine();
   }
@@ -123,6 +127,11 @@ export class WorkflowInstance<TSteps extends Step<any, any, any>[] = any, TTrigg
 
   async start({ triggerData }: { triggerData?: z.infer<TTriggerSchema> } = {}) {
     const results = await this.execute({ triggerData });
+
+    if (this.#onFinish) {
+      this.#onFinish();
+    }
+
     return {
       ...results,
       runId: this.runId,

@@ -17,7 +17,7 @@ import type {
   WorkflowOptions,
   WorkflowRunState,
 } from './types';
-import { getStepResult, isErrorEvent, isTransitionEvent, isVariableReference } from './utils';
+import { isVariableReference } from './utils';
 import { WorkflowInstance } from './workflow-instance';
 import type { WorkflowResultReturn } from './workflow-instance';
 
@@ -29,7 +29,7 @@ export class Workflow<
   triggerSchema?: TTriggerSchema;
   #retryConfig?: RetryConfig;
   #mastra?: MastraPrimitives;
-  #run: WorkflowInstance<TSteps, TTriggerSchema> | null = null;
+  #runs: Map<string, WorkflowInstance<TSteps, TTriggerSchema>> = new Map();
 
   // registers stepIds on `after` calls
   #afterStepStack: string[] = [];
@@ -193,8 +193,11 @@ export class Workflow<
       stepSubscriberGraph: this.#stepSubscriberGraph,
 
       onStepTransition: this.#onStepTransition,
+      onFinish: () => {
+        this.#runs.delete(run.runId);
+      },
     });
-    this.#run = run;
+    this.#runs.set(run.runId, run);
     return run;
   }
 
@@ -337,8 +340,9 @@ export class Workflow<
 
   async getState(runId: string): Promise<WorkflowRunState | null> {
     // If this is the currently running workflow
-    if (this.#run?.runId === runId) {
-      return this.#run.getState();
+    const run = this.#runs.get(runId);
+    if (run) {
+      return run.getState();
     }
 
     // If workflow is suspended/stored, get from storage
@@ -461,7 +465,8 @@ export class Workflow<
       stepId,
     });
 
-    return this.#run?.execute({
+    const run = this.#runs.get(runId);
+    return run?.execute({
       snapshot: parsedSnapshot,
       stepId,
     });
