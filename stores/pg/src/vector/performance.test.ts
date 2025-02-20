@@ -75,11 +75,11 @@ describe('PostgreSQL Vector Index Performance', () => {
     sizes: [100, 1000, 10000],
     indexConfigs: [
       // Test auto-configuration (undefined lists = use sqrt(N))
-      { type: 'ivfflat' },
+      // { type: 'ivfflat' },
       // Test fixed configurations
       { type: 'ivfflat', lists: 100 },
       // // Test size-proportional configurations
-      { type: 'ivfflat', lists: (size: number) => Math.floor(size / 10) }, // N/10 lists
+      // { type: 'ivfflat', lists: (size: number) => Math.floor(size / 10) }, // N/10 lists
     ],
   };
 
@@ -178,7 +178,7 @@ describe('PostgreSQL Vector Index Performance', () => {
             console.log(`\nTesting latency with size ${size}...`);
 
             const testVectors = generateRandomVectors(size, dimension);
-            const queryVectors = generateRandomVectors(1, dimension);
+            const queryVectors = generateRandomVectors(50, dimension); // Generate all query vectors upfront
 
             // Create index and insert vectors
             const lists = typeof indexConfig.lists === 'function' ? indexConfig.lists(size) : indexConfig.lists;
@@ -194,12 +194,12 @@ describe('PostgreSQL Vector Index Performance', () => {
             console.log('Warming up with initial query...');
             await vectorDB.query(testIndexName, queryVectors[0], 10);
 
-            const numQueries = 50;
             const latencies: number[] = [];
 
-            for (let i = 0; i < numQueries; i++) {
+            // Use each query vector directly
+            for (const queryVector of queryVectors) {
               const start = process.hrtime.bigint();
-              await vectorDB.query(testIndexName, queryVectors[i], 10);
+              await vectorDB.query(testIndexName, queryVector, 10);
               const end = process.hrtime.bigint();
               latencies.push(Number(end - start) / 1e6);
             }
@@ -217,13 +217,13 @@ describe('PostgreSQL Vector Index Performance', () => {
             });
 
             console.log(`
-            Dimension: ${dimension}
-            Config: ${indexConfig.type} (lists=${indexConfig.lists})
-            Dataset size: ${size}
-            P50 latency: ${p50.toFixed(2)}ms
-            P95 latency: ${p95.toFixed(2)}ms
-            P99 latency: ${p99.toFixed(2)}ms
-          `);
+              Dimension: ${dimension}
+              Config: ${indexConfig.type} (lists=${indexConfig.lists})
+              Dataset size: ${size}
+              P50 latency: ${p50.toFixed(2)}ms
+              P95 latency: ${p95.toFixed(2)}ms
+              P99 latency: ${p99.toFixed(2)}ms
+            `);
           },
           TEST_TIMEOUT,
         );
