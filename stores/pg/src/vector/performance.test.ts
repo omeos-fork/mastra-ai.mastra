@@ -3,18 +3,9 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from
 import { PgVector } from '.';
 
 const generateRandomVectors = (count: number, dim: number) => {
-  // Create a base vector for testing
-  const baseVector = Array.from({ length: dim }, () => Math.random() - 0.5);
-  const baseMagnitude = Math.sqrt(baseVector.reduce((sum, val) => sum + val * val, 0));
-  const normalizedBase = baseVector.map(val => val / baseMagnitude);
-
-  return Array.from({ length: count }, (_, i) => {
-    if (i === 0) return normalizedBase;
-
-    // Create variations of the base vector
-    const variation = Array.from({ length: dim }, () => (Math.random() - 0.5) * 0.2);
-    const vector = normalizedBase.map((val, j) => val + variation[j]);
-
+  return Array.from({ length: count }, () => {
+    // Generate truly random vectors
+    const vector = Array.from({ length: dim }, () => Math.random() - 0.5);
     // Normalize
     const magnitude = Math.sqrt(vector.reduce((sum, val) => sum + val * val, 0));
     return vector.map(val => val / magnitude);
@@ -86,16 +77,17 @@ describe('PostgreSQL Vector Index Performance', () => {
       // Test auto-configuration (undefined lists = use sqrt(N))
       { type: 'ivfflat' },
       // Test fixed configurations
-      // { type: 'ivfflat', lists: 100 },
+      { type: 'ivfflat', lists: 100 },
       // // Test size-proportional configurations
-      // { type: 'ivfflat', lists: (size: number) => Math.floor(size / 10) }, // N/10 lists
+      { type: 'ivfflat', lists: (size: number) => Math.floor(size / 10) }, // N/10 lists
     ],
   };
 
   let vectorDB: PgVector;
   const testIndexName = 'test_index_performance';
   const results: TestResult[] = [];
-  const connectionString = process.env.DB_URL || 'postgresql://postgres:postgres@localhost:5434/mastra';
+  const connectionString =
+    process.env.DB_URL || 'postgresql://postgres:postgres@localhost:5434/mastra?options=--maintenance_work_mem%3D512MB';
 
   const TEST_TIMEOUT = 30000;
   const HOOK_TIMEOUT = 60000;
@@ -103,8 +95,6 @@ describe('PostgreSQL Vector Index Performance', () => {
   beforeAll(async () => {
     vectorDB = new PgVector(connectionString);
     await vectorDB.pool.query('CREATE EXTENSION IF NOT EXISTS vector;');
-    // Increase maintenance_work_mem for index creation
-    await vectorDB.pool.query('SET maintenance_work_mem = "256MB";');
   }, HOOK_TIMEOUT);
 
   beforeEach(async () => {
@@ -127,8 +117,12 @@ describe('PostgreSQL Vector Index Performance', () => {
               console.log(`\nTesting recall with size ${size}...`);
 
               // Generate test vectors
-              const vectors = generateRandomVectors(size, dimension);
-              const queryVector = vectors[0];
+              const testVectors = generateRandomVectors(size, dimension);
+              const queryVector = testVectors[0];
+
+              // Generate separate query vectors
+              const numQueries = 10;
+              const queryVectors = generateRandomVectors(numQueries, dimension);
 
               // Create index and insert vectors
               const lists = typeof indexConfig.lists === 'function' ? indexConfig.lists(size) : indexConfig.lists;
@@ -141,12 +135,12 @@ describe('PostgreSQL Vector Index Performance', () => {
               await vectorDB.createIndex(testIndexName, dimension, 'cosine', config);
 
               // Use simple string IDs and store index in metadata
-              const vectorIds = vectors.map((_, idx) => `vec_${idx}`);
-              const metadata = vectors.map((_, idx) => ({ index: idx }));
-              await vectorDB.upsert(testIndexName, vectors, vectorIds, metadata);
+              const vectorIds = testVectors.map((_, idx) => `vec_${idx}`);
+              const metadata = testVectors.map((_, idx) => ({ index: idx }));
+              await vectorDB.upsert(testIndexName, testVectors, vectorIds, metadata);
 
               // Find nearest neighbors using brute force
-              const expectedNeighbors = findNearestBruteForce(queryVector, vectors, 10);
+              const expectedNeighbors = findNearestBruteForce(queryVector, testVectors, 10);
 
               // Query using index
               const actualResults = await vectorDB.query(testIndexName, queryVector, 10);
@@ -183,8 +177,8 @@ describe('PostgreSQL Vector Index Performance', () => {
             const size = testConfigs.sizes[0];
             console.log(`\nTesting latency with size ${size}...`);
 
-            const vectors = generateRandomVectors(size, dimension);
-            const queryVector = generateRandomVectors(1, dimension)[0];
+            const testVectors = generateRandomVectors(size, dimension);
+            const queryVectors = generateRandomVectors(1, dimension);
 
             // Create index and insert vectors
             const lists = typeof indexConfig.lists === 'function' ? indexConfig.lists(size) : indexConfig.lists;
@@ -195,17 +189,17 @@ describe('PostgreSQL Vector Index Performance', () => {
             };
 
             await vectorDB.createIndex(testIndexName, dimension, 'cosine', config);
-            await vectorDB.upsert(testIndexName, vectors);
+            await vectorDB.upsert(testIndexName, testVectors);
 
             console.log('Warming up with initial query...');
-            await vectorDB.query(testIndexName, queryVector, 10);
+            await vectorDB.query(testIndexName, queryVectors[0], 10);
 
             const numQueries = 50;
             const latencies: number[] = [];
 
             for (let i = 0; i < numQueries; i++) {
               const start = process.hrtime.bigint();
-              await vectorDB.query(testIndexName, queryVector, 10);
+              await vectorDB.query(testIndexName, queryVectors[i], 10);
               const end = process.hrtime.bigint();
               latencies.push(Number(end - start) / 1e6);
             }
@@ -240,7 +234,7 @@ describe('PostgreSQL Vector Index Performance', () => {
             const size = testConfigs.sizes[0];
             console.log(`\nTesting cluster distribution with size ${size}...`);
 
-            const vectors = generateRandomVectors(size, dimension);
+            const testVectors = generateRandomVectors(size, dimension);
 
             // Create index and insert vectors
             const lists =
@@ -254,7 +248,7 @@ describe('PostgreSQL Vector Index Performance', () => {
             };
 
             await vectorDB.createIndex(testIndexName, dimension, 'cosine', config);
-            await vectorDB.upsert(testIndexName, vectors);
+            await vectorDB.upsert(testIndexName, testVectors);
 
             const client = await vectorDB.pool.connect();
             try {
@@ -317,65 +311,81 @@ const analyzeResults = (results: TestResult[]) => {
   Object.entries(byDimension).forEach(([dimension, dimensionResults]) => {
     console.log(`\n=== Analysis for ${dimension} dimensions ===`);
 
-    // Analyze recall with proper list handling
+    // For recall analysis, resolve the function to its actual value
     const recalls = dimensionResults
       .filter(r => r.metrics.recall !== undefined)
       .map(r => ({
         size: r.size,
-        lists: r.indexConfig.lists ?? Math.floor(Math.sqrt(r.size)), // Calculate if undefined
+        lists:
+          typeof r.indexConfig.lists === 'function'
+            ? r.indexConfig.lists(r.size)
+            : (r.indexConfig.lists ?? Math.floor(Math.sqrt(r.size))),
         recall: r.metrics.recall!,
       }));
 
-    console.log('\nRecall Analysis:');
+    console.log('\nRecall Analysis by Dataset Size:');
     console.table(
       groupBy(recalls, 'size', result => ({
-        'min recall': min(result.map(r => r.recall)),
-        'max recall': max(result.map(r => r.recall)),
-        'avg recall': mean(result.map(r => r.recall)),
-        'best lists': result.reduce((a, b) => (a.recall > b.recall ? a : b)).lists,
+        'Dataset Size': result[0].size,
+        'Min Recall': min(result.map(r => r.recall)),
+        'Avg Recall': mean(result.map(r => r.recall)),
+        'Best Config (Lists)': result.reduce((a, b) => (a.recall > b.recall ? a : b)).lists,
+        'Vectors/List Ratio': result[0].size / result[0].lists,
       })),
     );
 
-    // Analyze latency with proper list handling
+    // For latency analysis
     const latencies = dimensionResults
       .filter(r => r.metrics.latency !== undefined)
-      .map(r => ({
-        size: r.size,
-        lists: r.indexConfig.lists ?? Math.floor(Math.sqrt(r.size)), // Calculate if undefined
-        p50: r.metrics.latency!.p50,
-        p95: r.metrics.latency!.p95,
-        p99: r.metrics.latency!.p99,
-        listsToVectorRatio: (r.indexConfig.lists ?? Math.floor(Math.sqrt(r.size))) / r.size,
-      }));
+      .map(r => {
+        const lists =
+          typeof r.indexConfig.lists === 'function'
+            ? r.indexConfig.lists(r.size)
+            : (r.indexConfig.lists ?? Math.floor(Math.sqrt(r.size)));
+        return {
+          size: r.size,
+          lists,
+          p50: r.metrics.latency!.p50,
+          p95: r.metrics.latency!.p95,
+          p99: r.metrics.latency!.p99,
+          listsToVectorRatio: lists / r.size,
+        };
+      });
 
-    console.log('\nLatency Analysis (ms):');
+    console.log('\nLatency Analysis by Dataset Size:');
     console.table(
       groupBy(latencies, 'size', result => ({
-        'min p50': min(result.map(r => r.p50)),
-        'avg p50': mean(result.map(r => r.p50)),
-        'min p95': min(result.map(r => r.p95)),
-        'avg p95': mean(result.map(r => r.p95)),
-        'lists/vectors ratio': mean(result.map(r => r.listsToVectorRatio)),
-        'best lists': result.reduce((a, b) => (a.p95 < b.p95 ? a : b)).lists,
+        'Dataset Size': result[0].size,
+        'P50 (ms)': mean(result.map(r => r.p50)),
+        'P95 (ms)': mean(result.map(r => r.p95)),
+        Lists: result[0].lists,
+        'Vectors/List': result[0].size / result[0].lists,
       })),
     );
 
-    // Analyze clustering with proper list handling
+    // For clustering analysis
     const clustering = dimensionResults
       .filter(r => r.metrics.clustering !== undefined)
-      .map(r => ({
-        size: r.size,
-        lists: r.indexConfig.lists ?? Math.floor(Math.sqrt(r.size)), // Calculate if undefined
-        avgVectorsPerList: r.size / (r.indexConfig.lists ?? Math.floor(Math.sqrt(r.size))),
-      }));
+      .map(r => {
+        const lists =
+          typeof r.indexConfig.lists === 'function'
+            ? r.indexConfig.lists(r.size)
+            : (r.indexConfig.lists ?? Math.floor(Math.sqrt(r.size)));
+        return {
+          size: r.size,
+          lists,
+          avgVectorsPerList: r.size / lists,
+        };
+      });
 
-    console.log('\nClustering Analysis:');
+    console.log('\nClustering Analysis by Dataset Size:');
     console.table(
       groupBy(clustering, 'size', result => ({
-        'vectors per list': mean(result.map(r => r.avgVectorsPerList)),
-        'recommended lists': Math.floor(Math.sqrt(result[0].size)),
-        'actual lists': result[0].lists,
-        'efficiency ratio': result[0].lists / Math.floor(Math.sqrt(result[0].size)),
+        'Dataset Size': result[0].size,
+        'Vectors/List': result[0].size / result[0].lists,
+        'Recommended Lists': Math.floor(Math.sqrt(result[0].size)),
+        'Actual Lists': result[0].lists,
+        Efficiency: result[0].lists / Math.floor(Math.sqrt(result[0].size)),
       })),
     );
 
