@@ -518,8 +518,6 @@ export class WorkflowInstance<TSteps extends Step<any, any, any>[] = any, TTrigg
           const actor = createActor(subscriberMachine, { input: context });
           actor.start();
 
-          const parentState = (await this.getState()) ?? { value: { [parentStepId]: 'runningSubscribers' } };
-
           // Create a promise that resolves when all states are final
           return new Promise(resolve => {
             const suspendedPaths = new Set<string>();
@@ -544,14 +542,17 @@ export class WorkflowInstance<TSteps extends Step<any, any, any>[] = any, TTrigg
               }
 
               if (this.#onStepTransition) {
-                const mergedValue = mergeChildValue(parentState.value as Record<string, string>, state.value);
-                this.#onStepTransition.forEach(onTransition => {
-                  onTransition({
-                    runId: this.runId,
-                    value: mergedValue as Record<string, string>,
-                    context: state.context as WorkflowContext,
-                    activePaths: getActivePathsAndStatus(mergedValue as Record<string, string>),
-                    timestamp: Date.now(),
+                this.getState().then(parentState => {
+                  const parentValue = parentState?.value ?? { [parentStepId]: 'runningSubscribers' };
+                  const mergedValue = mergeChildValue(parentValue as Record<string, string>, state.value);
+                  this.#onStepTransition.forEach(onTransition => {
+                    onTransition({
+                      runId: this.runId,
+                      value: mergedValue as Record<string, string>,
+                      context: state.context as WorkflowContext,
+                      activePaths: getActivePathsAndStatus(mergedValue as Record<string, string>),
+                      timestamp: Date.now(),
+                    });
                   });
                 });
               }
