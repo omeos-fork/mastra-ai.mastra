@@ -4,6 +4,7 @@ import pg from 'pg';
 
 import { PGFilterTranslator } from './filter';
 import { buildFilterQuery } from './sql-builder';
+import { IndexConfig, IndexType } from './types';
 
 export class PgVector extends MastraVector {
   private pool: pg.Pool;
@@ -132,7 +133,7 @@ export class PgVector extends MastraVector {
     indexName: string,
     dimension: number,
     metric: 'cosine' | 'euclidean' | 'dotproduct' = 'cosine',
-    indexConfig: { lists?: number } = {},
+    indexConfig: IndexConfig = {},
   ): Promise<void> {
     const client = await this.pool.connect();
     try {
@@ -169,7 +170,7 @@ export class PgVector extends MastraVector {
       `);
 
       // Create the index using createOrRebuildIndex
-      await this.createOrRebuildIndex(indexName, metric, indexConfig);
+      await this.configureIndex(indexName, metric, indexConfig);
     } catch (error: any) {
       console.error('Failed to create vector table:', error);
       throw error;
@@ -178,34 +179,23 @@ export class PgVector extends MastraVector {
     }
   }
 
-  // New method to create/rebuild index
-  async createOrRebuildIndex(
+  async configureIndex(
     indexName: string,
     metric: 'cosine' | 'euclidean' | 'dotproduct' = 'cosine',
-    indexConfig: { lists?: number } = {},
+    indexConfig: IndexConfig = {},
   ): Promise<void> {
     const client = await this.pool.connect();
     try {
-      // Get row count to determine lists if not provided
-      const countResult = await client.query(`
-        SELECT COUNT(*) FROM ${indexName}
-      `);
-      const rowCount = parseInt(countResult.rows[0].count);
+      // If type is 'flat', don't create an index
+      if (indexConfig.type === 'flat') {
+        // Drop existing index if any
+        await client.query(`
+          DROP INDEX IF EXISTS ${indexName}_vector_idx
+        `);
+        return;
+      }
 
-      // Calculate optimal lists:
-      // - If provided in config, use that
-      // - Otherwise use sqrt(N) with min/max bounds
-      const lists =
-        indexConfig.lists ??
-        Math.max(
-          10, // Minimum lists
-          Math.min(
-            1000, // Maximum lists
-            Math.floor(Math.sqrt(rowCount)),
-          ),
-        );
-
-      const indexMethod =
+      const metricOp =
         metric === 'cosine' ? 'vector_cosine_ops' : metric === 'euclidean' ? 'vector_l2_ops' : 'vector_ip_ops';
 
       // Drop existing index if any
@@ -213,20 +203,113 @@ export class PgVector extends MastraVector {
         DROP INDEX IF EXISTS ${indexName}_vector_idx
       `);
 
-      // Create new index with calculated or provided lists
-      await client.query(`
-        CREATE INDEX ${indexName}_vector_idx
-        ON ${indexName}
-        USING ivfflat (embedding ${indexMethod})
-        WITH (lists = ${lists});
-      `);
+      // For IVFFlat, calculate optimal lists if not provided
+      if (indexConfig.type !== 'hnsw') {
+        // Get row count to determine lists if not provided
+        const countResult = await client.query(`
+          SELECT COUNT(*) FROM ${indexName}
+        `);
+        const rowCount = parseInt(countResult.rows[0].count);
+
+        // Calculate optimal lists if not provided
+        if (!indexConfig.ivf?.lists) {
+          indexConfig = {
+            type: 'ivfflat',
+            ivf: {
+              lists: Math.max(
+                10, // Minimum lists
+                Math.min(
+                  1000, // Maximum lists
+                  Math.floor(Math.sqrt(rowCount)),
+                ),
+              ),
+            },
+          };
+        }
+      }
+
+      // Build and execute index creation SQL
+      let indexSQL: string;
+      if (indexConfig.type === 'hnsw') {
+        const m = indexConfig.hnsw?.m ?? 16;
+        const efConstruction = indexConfig.hnsw?.efConstruction ?? 64;
+        const ef = indexConfig.hnsw?.ef ?? 40;
+
+        indexSQL = `
+          CREATE INDEX ${indexName}_vector_idx 
+          ON ${indexName} 
+          USING hnsw (embedding ${metricOp})
+          WITH (
+            m = ${m},
+            ef_construction = ${efConstruction},
+            ef = ${ef}
+          )
+        `;
+      } else {
+        // ivfflat
+        const lists = indexConfig.ivf?.lists ?? 100;
+
+        indexSQL = `
+          CREATE INDEX ${indexName}_vector_idx
+          ON ${indexName}
+          USING ivfflat (embedding ${metricOp})
+          WITH (lists = ${lists})
+        `;
+      }
+
+      await client.query(indexSQL);
     } finally {
       client.release();
     }
   }
 
+  // Update reoptimizeIndex to pass the current index configuration
   async reoptimizeIndex(indexName: string): Promise<void> {
-    await this.createOrRebuildIndex(indexName);
+    // Get current index configuration
+    const client = await this.pool.connect();
+    try {
+      const indexQuery = `
+        SELECT a.amname as index_type,
+               pg_get_indexdef(i.indexrelid) as index_def
+        FROM pg_index i
+        JOIN pg_class c ON i.indexrelid = c.oid
+        JOIN pg_am a ON c.relam = a.oid
+        WHERE c.relname = '${indexName}_vector_idx';
+      `;
+
+      const result = await client.query(indexQuery);
+      if (result.rows.length > 0) {
+        const indexType = result.rows[0].index_type;
+        const indexDef = result.rows[0].index_def;
+
+        // Parse existing configuration
+        const config: IndexConfig = { type: indexType as IndexType };
+
+        if (indexType === 'hnsw') {
+          const m = indexDef.match(/m = (\d+)/)?.[1];
+          const ef = indexDef.match(/ef = (\d+)/)?.[1];
+          const efConstruction = indexDef.match(/ef_construction = (\d+)/)?.[1];
+
+          config.hnsw = {
+            m: m ? parseInt(m) : undefined,
+            ef: ef ? parseInt(ef) : undefined,
+            efConstruction: efConstruction ? parseInt(efConstruction) : undefined,
+          };
+        } else if (indexType === 'ivfflat') {
+          const lists = indexDef.match(/lists = (\d+)/)?.[1];
+          config.ivf = {
+            lists: lists ? parseInt(lists) : undefined,
+          };
+        }
+
+        // Get metric type
+        const metric = indexDef.includes('cosine') ? 'cosine' : indexDef.includes('l2') ? 'euclidean' : 'dotproduct';
+
+        await this.configureIndex(indexName, metric, config);
+      }
+    } finally {
+      client.release();
+    }
   }
 
   async listIndexes(): Promise<string[]> {

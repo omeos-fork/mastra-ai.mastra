@@ -82,8 +82,7 @@ const getListCount = (result: TestResult): number => {
 
 describe('PostgreSQL Vector Index Performance', () => {
   const testConfigs = {
-    dimensions: [64, 384],
-    // dimensions: [64, 384, 1024],
+    dimensions: [64],
     sizes: [100, 1000, 10000],
     kValues: [10, 25, 50, 75, 100],
     indexConfigs: [
@@ -349,7 +348,7 @@ const analyzeResults = (results: TestResult[]) => {
   Object.entries(byDimension).forEach(([dimension, dimensionResults]) => {
     console.log(`\n=== Analysis for ${dimension} dimensions ===\n`);
 
-    // Group by size and k for recall analysis
+    // Group by size, k, and lists for recall analysis
     const recalls = dimensionResults
       .filter(r => r.metrics.recall !== undefined)
       .map(r => ({
@@ -362,19 +361,19 @@ const analyzeResults = (results: TestResult[]) => {
         vectorsPerList: Math.round(r.size / getListCount(r)),
       }));
 
-    console.log('Recall Analysis by Dataset Size and K:');
-    const recallColumns = ['Dataset Size', 'K', 'Min Recall', 'Avg Recall', 'Max Recall', 'Lists', 'Vectors/List'];
+    console.log('Recall Analysis by Dataset Size, K, and Lists:');
+    const recallColumns = ['Dataset Size', 'K', 'Lists', 'Min Recall', 'Avg Recall', 'Max Recall', 'Vectors/List'];
     const recallData = Object.values(
       groupBy(
         recalls,
-        r => `${r.size}-${r.k}`,
+        r => `${r.size}-${r.k}-${r.lists}`,
         result => ({
           'Dataset Size': result[0].size,
           K: result[0].k,
+          Lists: result[0].lists,
           'Min Recall': result[0].minRecall.toFixed(3),
           'Avg Recall': mean(result.map(r => r.recall)).toFixed(3),
           'Max Recall': result[0].maxRecall.toFixed(3),
-          Lists: result[0].lists,
           'Vectors/List': result[0].vectorsPerList,
         }),
       ),
@@ -386,39 +385,28 @@ const analyzeResults = (results: TestResult[]) => {
       .map(r => ({
         size: r.size,
         k: r.k,
+        lists: getListCount(r),
         p50: r.metrics.latency!.p50,
         p95: r.metrics.latency!.p95,
-        lists: getListCount(r),
         vectorsPerList: Math.round(r.size / getListCount(r)),
       }));
 
+    console.log('Latency Analysis by Dataset Size, K, and Lists:');
+    const latencyColumns = ['Dataset Size', 'K', 'Lists', 'P50 (ms)', 'P95 (ms)', 'Vectors/List'];
     const latencyData = Object.values(
       groupBy(
         latencies,
-        r => `${r.size}-${r.k}`,
-        results => {
-          // Find the result with the most complete information
-          const bestResult = results.reduce((best, current) => {
-            if (!best.lists) return current;
-            if (!current.lists) return best;
-            // Prefer results with more reasonable list counts
-            return current.lists > 0 ? current : best;
-          });
-
-          return {
-            'Dataset Size': bestResult.size,
-            K: bestResult.k,
-            'P50 (ms)': mean(results.map(r => r.p50)).toFixed(2),
-            'P95 (ms)': mean(results.map(r => r.p95)).toFixed(2),
-            Lists: bestResult.lists,
-            'Vectors/List': bestResult.vectorsPerList,
-          };
-        },
+        r => `${r.size}-${r.k}-${r.lists}`,
+        results => ({
+          'Dataset Size': results[0].size,
+          K: results[0].k,
+          Lists: results[0].lists,
+          'P50 (ms)': mean(results.map(r => r.p50)).toFixed(2),
+          'P95 (ms)': mean(results.map(r => r.p95)).toFixed(2),
+          'Vectors/List': results[0].vectorsPerList,
+        }),
       ),
     );
-
-    console.log('Latency Analysis by Dataset Size and K:');
-    const latencyColumns = ['Dataset Size', 'K', 'P50 (ms)', 'P95 (ms)', 'Lists', 'Vectors/List'];
     console.log(formatTable(latencyData, latencyColumns));
 
     const clustering = dimensionResults
