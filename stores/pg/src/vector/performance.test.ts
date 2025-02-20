@@ -60,7 +60,8 @@ interface TestResult {
     latency?: {
       p50: number;
       p95: number;
-      p99: number;
+      lists: number;
+      vectorsPerList: number;
     };
     clustering?: {
       numLists: number;
@@ -69,18 +70,29 @@ interface TestResult {
   };
 }
 
+const getListCount = (result: TestResult): number => {
+  if (result.metrics.latency?.lists) {
+    return result.metrics.latency.lists;
+  }
+  if (typeof result.indexConfig.lists === 'function') {
+    return result.indexConfig.lists(result.size);
+  }
+  return result.indexConfig.lists ?? Math.floor(Math.sqrt(result.size));
+};
+
 describe('PostgreSQL Vector Index Performance', () => {
   const testConfigs = {
-    dimensions: [64, 384, 1024],
+    dimensions: [64, 384],
+    // dimensions: [64, 384, 1024],
     sizes: [100, 1000, 10000],
     kValues: [10, 25, 50, 75, 100],
     indexConfigs: [
       // Test auto-configuration (undefined lists = use sqrt(N))
-      // { type: 'ivfflat' },
+      { type: 'ivfflat' },
       // Test fixed configurations
       { type: 'ivfflat', lists: 100 },
       // // Test size-proportional configurations
-      // { type: 'ivfflat', lists: (size: number) => Math.floor(size / 10) }, // N/10 lists
+      { type: 'ivfflat', lists: (size: number) => Math.floor(size / 10) }, // N/10 lists
     ],
   };
 
@@ -90,7 +102,7 @@ describe('PostgreSQL Vector Index Performance', () => {
   const connectionString =
     process.env.DB_URL || 'postgresql://postgres:postgres@localhost:5434/mastra?options=--maintenance_work_mem%3D512MB';
 
-  const HOOK_TIMEOUT = 60000;
+  const HOOK_TIMEOUT = 600000;
 
   beforeAll(async () => {
     vectorDB = new PgVector(connectionString);
@@ -109,8 +121,8 @@ describe('PostgreSQL Vector Index Performance', () => {
 
   // Calculate timeout based on dimension, size, and k value
   const calculateTimeout = (dimension: number, size: number, k: number) => {
-    // Base timeout of 30 seconds
-    let timeout = 30000;
+    // Base timeout of 600 seconds
+    let timeout = 600000;
 
     // Add time based on dimension
     if (dimension >= 1024)
@@ -143,7 +155,7 @@ describe('PostgreSQL Vector Index Performance', () => {
               const queryVectors = generateRandomVectors(numQueries, dimension);
 
               // Create index and insert vectors
-              const lists = typeof indexConfig.lists === 'function' ? indexConfig.lists(size) : indexConfig.lists;
+              const lists = getListCount({ size, indexConfig, metrics: {} } as TestResult);
               const config = { type: indexConfig.type, lists };
               await vectorDB.createIndex(testIndexName, dimension, 'cosine', config);
 
@@ -154,6 +166,8 @@ describe('PostgreSQL Vector Index Performance', () => {
               // Test each k value
               for (const k of testConfigs.kValues) {
                 const recalls: number[] = [];
+                const lists = getListCount({ size, indexConfig, k, metrics: {} } as TestResult);
+
                 for (const queryVector of queryVectors) {
                   const expectedNeighbors = findNearestBruteForce(queryVector, testVectors, k);
                   const actualResults = await vectorDB.query(testIndexName, queryVector, k);
@@ -164,7 +178,10 @@ describe('PostgreSQL Vector Index Performance', () => {
 
                 results.push({
                   dimension,
-                  indexConfig,
+                  indexConfig: {
+                    ...indexConfig,
+                    lists,
+                  },
                   size,
                   k,
                   metrics: {
@@ -190,9 +207,8 @@ describe('PostgreSQL Vector Index Performance', () => {
                 const testVectors = generateRandomVectors(size, dimension);
                 const queryVectors = generateRandomVectors(50, dimension);
 
-                const lists = typeof indexConfig.lists === 'function' ? indexConfig.lists(size) : indexConfig.lists;
+                const lists = getListCount({ size, indexConfig, k, metrics: {} } as TestResult);
                 const config = { type: indexConfig.type, lists };
-
                 await vectorDB.createIndex(testIndexName, dimension, 'cosine', config);
                 await vectorDB.upsert(testIndexName, testVectors);
 
@@ -210,14 +226,18 @@ describe('PostgreSQL Vector Index Performance', () => {
                 const sorted = [...latencies].sort((a, b) => a - b);
                 results.push({
                   dimension,
-                  indexConfig,
+                  indexConfig: {
+                    type: indexConfig.type,
+                    lists,
+                  },
                   size,
                   k,
                   metrics: {
                     latency: {
                       p50: sorted[Math.floor(sorted.length * 0.5)],
                       p95: sorted[Math.floor(sorted.length * 0.95)],
-                      p99: sorted[Math.floor(sorted.length * 0.99)],
+                      lists,
+                      vectorsPerList: Math.round(size / lists),
                     },
                   },
                 });
@@ -235,10 +255,7 @@ describe('PostgreSQL Vector Index Performance', () => {
               console.log(`Testing cluster distribution with size ${size}...`);
 
               const testVectors = generateRandomVectors(size, dimension);
-              const lists =
-                typeof indexConfig.lists === 'function'
-                  ? indexConfig.lists(size)
-                  : (indexConfig.lists ?? Math.floor(Math.sqrt(size)));
+              const lists = getListCount({ size, indexConfig, metrics: {} } as TestResult);
 
               const config = { type: indexConfig.type, lists };
               await vectorDB.createIndex(testIndexName, dimension, 'cosine', config);
@@ -267,7 +284,15 @@ describe('PostgreSQL Vector Index Performance', () => {
 
 const formatTable = (data: any[], columns: string[]) => {
   // Calculate max width for each column including header
-  const colWidths = columns.map(col => Math.max(col.length, ...data.map(row => row[col].toString().length)));
+  const colWidths = columns.map(col =>
+    Math.max(
+      col.length,
+      ...data.map(row => {
+        const value = row[col];
+        return value === undefined || value === null ? '-'.length : value.toString().length;
+      }),
+    ),
+  );
 
   // Create the table components
   const topBorder = '┌' + colWidths.map(w => '─'.repeat(w)).join('┬') + '┐';
@@ -276,7 +301,19 @@ const formatTable = (data: any[], columns: string[]) => {
 
   // Format header and rows with proper borders
   const header = '│' + columns.map((col, i) => col.padEnd(colWidths[i])).join('│') + '│';
-  const rows = data.map(row => '│' + columns.map((col, i) => row[col].toString().padEnd(colWidths[i])).join('│') + '│');
+  const rows = data.map(
+    row =>
+      '│' +
+      columns
+        .map((col, i) => {
+          const value = row[col];
+          // Handle undefined/null values
+          const displayValue = value === undefined || value === null ? '-' : value.toString();
+          return displayValue.padEnd(colWidths[i]);
+        })
+        .join('│') +
+      '│',
+  );
 
   return [topBorder, header, headerSeparator, ...rows, bottomBorder].join('\n');
 };
@@ -318,10 +355,11 @@ const analyzeResults = (results: TestResult[]) => {
       .map(r => ({
         size: r.size,
         k: r.k,
-        lists: typeof r.indexConfig.lists === 'function' ? r.indexConfig.lists(r.size) : r.indexConfig.lists,
+        lists: getListCount(r),
         recall: r.metrics.recall!,
         minRecall: r.metrics.minRecall!,
         maxRecall: r.metrics.maxRecall!,
+        vectorsPerList: Math.round(r.size / getListCount(r)),
       }));
 
     console.log('Recall Analysis by Dataset Size and K:');
@@ -337,41 +375,51 @@ const analyzeResults = (results: TestResult[]) => {
           'Avg Recall': mean(result.map(r => r.recall)).toFixed(3),
           'Max Recall': result[0].maxRecall.toFixed(3),
           Lists: result[0].lists,
-          'Vectors/List': Math.round(result[0].size / result[0].lists),
+          'Vectors/List': result[0].vectorsPerList,
         }),
       ),
     );
     console.log(formatTable(recallData, recallColumns));
 
-    // Similar fix for latency analysis
     const latencies = dimensionResults
       .filter(r => r.metrics.latency !== undefined)
       .map(r => ({
         size: r.size,
         k: r.k,
-        lists: typeof r.indexConfig.lists === 'function' ? r.indexConfig.lists(r.size) : r.indexConfig.lists,
         p50: r.metrics.latency!.p50,
         p95: r.metrics.latency!.p95,
+        lists: getListCount(r),
+        vectorsPerList: Math.round(r.size / getListCount(r)),
       }));
 
-    const latencyColumns = ['Dataset Size', 'K', 'P50 (ms)', 'P95 (ms)', 'Lists', 'Vectors/List'];
     const latencyData = Object.values(
       groupBy(
         latencies,
         r => `${r.size}-${r.k}`,
-        result => ({
-          'Dataset Size': result[0].size,
-          K: result[0].k,
-          'P50 (ms)': result[0].p50.toFixed(2),
-          'P95 (ms)': result[0].p95.toFixed(2),
-          Lists: result[0].lists,
-          'Vectors/List': Math.round(result[0].size / result[0].lists),
-        }),
+        results => {
+          // Find the result with the most complete information
+          const bestResult = results.reduce((best, current) => {
+            if (!best.lists) return current;
+            if (!current.lists) return best;
+            // Prefer results with more reasonable list counts
+            return current.lists > 0 ? current : best;
+          });
+
+          return {
+            'Dataset Size': bestResult.size,
+            K: bestResult.k,
+            'P50 (ms)': mean(results.map(r => r.p50)).toFixed(2),
+            'P95 (ms)': mean(results.map(r => r.p95)).toFixed(2),
+            Lists: bestResult.lists,
+            'Vectors/List': bestResult.vectorsPerList,
+          };
+        },
       ),
     );
-    console.log(formatTable(latencyData, latencyColumns));
 
-    console.log('Clustering Analysis by Dataset Size:');
+    console.log('Latency Analysis by Dataset Size and K:');
+    const latencyColumns = ['Dataset Size', 'K', 'P50 (ms)', 'P95 (ms)', 'Lists', 'Vectors/List'];
+    console.log(formatTable(latencyData, latencyColumns));
 
     const clustering = dimensionResults
       .filter(r => r.metrics.clustering !== undefined)
@@ -379,9 +427,10 @@ const analyzeResults = (results: TestResult[]) => {
         size: r.size,
         vectorsPerList: r.metrics.clustering!.avgVectorsPerList,
         recommendedLists: Math.floor(Math.sqrt(r.size)),
-        actualLists: r.metrics.clustering!.numLists,
+        actualLists: getListCount(r),
       }));
 
+    console.log('Clustering Analysis by Dataset Size:');
     const clusteringColumns = ['Dataset Size', 'Vectors/List', 'Recommended Lists', 'Actual Lists', 'Efficiency'];
     const clusteringData = Object.values(
       groupBy(

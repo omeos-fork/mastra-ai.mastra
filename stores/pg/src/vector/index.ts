@@ -89,23 +89,35 @@ export class PgVector extends MastraVector {
     try {
       await client.query('BEGIN');
 
+      // Get initial count
+      const initialCount = parseInt((await client.query(`SELECT COUNT(*) FROM ${indexName}`)).rows[0].count);
+
       const vectorIds = ids || vectors.map(() => crypto.randomUUID());
 
       for (let i = 0; i < vectors.length; i++) {
         const query = `
-            INSERT INTO ${indexName} (vector_id, embedding, metadata)
-            VALUES ($1, $2::vector, $3::jsonb)
-            ON CONFLICT (vector_id)
-            DO UPDATE SET
-                embedding = $2::vector,
-                metadata = $3::jsonb
-            RETURNING embedding::text
+          INSERT INTO ${indexName} (vector_id, embedding, metadata)
+          VALUES ($1, $2::vector, $3::jsonb)
+          ON CONFLICT (vector_id)
+          DO UPDATE SET
+            embedding = $2::vector,
+            metadata = $3::jsonb
+          RETURNING embedding::text
         `;
 
         await client.query(query, [vectorIds[i], `[${vectors[i]?.join(',')}]`, JSON.stringify(metadata?.[i] || {})]);
       }
 
       await client.query('COMMIT');
+
+      // Check if reoptimization is needed
+      const finalCount = parseInt((await client.query(`SELECT COUNT(*) FROM ${indexName}`)).rows[0].count);
+      const growthRatio = finalCount / initialCount;
+
+      // Reoptimize if size changed significantly (e.g., grew by 50% or more)
+      if (growthRatio > 1.5 || growthRatio < 0.5) {
+        await this.reoptimizeIndex(indexName);
+      }
 
       return vectorIds;
     } catch (error) {
@@ -120,6 +132,7 @@ export class PgVector extends MastraVector {
     indexName: string,
     dimension: number,
     metric: 'cosine' | 'euclidean' | 'dotproduct' = 'cosine',
+    indexConfig: { lists?: number } = {},
   ): Promise<void> {
     const client = await this.pool.connect();
     try {
@@ -155,22 +168,65 @@ export class PgVector extends MastraVector {
         );
       `);
 
-      // Create the index
-      const indexMethod =
-        metric === 'cosine' ? 'vector_cosine_ops' : metric === 'euclidean' ? 'vector_l2_ops' : 'vector_ip_ops';
-
-      await client.query(`
-        CREATE INDEX IF NOT EXISTS ${indexName}_vector_idx
-        ON public.${indexName}
-        USING ivfflat (embedding ${indexMethod})
-        WITH (lists = 100);
-      `);
+      // Create the index using createOrRebuildIndex
+      await this.createOrRebuildIndex(indexName, metric, indexConfig);
     } catch (error: any) {
       console.error('Failed to create vector table:', error);
       throw error;
     } finally {
       client.release();
     }
+  }
+
+  // New method to create/rebuild index
+  async createOrRebuildIndex(
+    indexName: string,
+    metric: 'cosine' | 'euclidean' | 'dotproduct' = 'cosine',
+    indexConfig: { lists?: number } = {},
+  ): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      // Get row count to determine lists if not provided
+      const countResult = await client.query(`
+        SELECT COUNT(*) FROM ${indexName}
+      `);
+      const rowCount = parseInt(countResult.rows[0].count);
+
+      // Calculate optimal lists:
+      // - If provided in config, use that
+      // - Otherwise use sqrt(N) with min/max bounds
+      const lists =
+        indexConfig.lists ??
+        Math.max(
+          10, // Minimum lists
+          Math.min(
+            1000, // Maximum lists
+            Math.floor(Math.sqrt(rowCount)),
+          ),
+        );
+
+      const indexMethod =
+        metric === 'cosine' ? 'vector_cosine_ops' : metric === 'euclidean' ? 'vector_l2_ops' : 'vector_ip_ops';
+
+      // Drop existing index if any
+      await client.query(`
+        DROP INDEX IF EXISTS ${indexName}_vector_idx
+      `);
+
+      // Create new index with calculated or provided lists
+      await client.query(`
+        CREATE INDEX ${indexName}_vector_idx
+        ON ${indexName}
+        USING ivfflat (embedding ${indexMethod})
+        WITH (lists = ${lists});
+      `);
+    } finally {
+      client.release();
+    }
+  }
+
+  async reoptimizeIndex(indexName: string): Promise<void> {
+    await this.createOrRebuildIndex(indexName);
   }
 
   async listIndexes(): Promise<string[]> {
