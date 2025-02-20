@@ -129,10 +129,69 @@ export const calculateTimeout = (dimension: number, size: number, k: number) => 
 };
 
 export const baseTestConfigs = {
-  dimensions: [64, 384, 1024],
-  sizes: [100, 1000, 10000],
-  kValues: [10, 25, 50, 75, 100],
+  basicTests: {
+    dimension: [
+      { dimension: 64, size: 10_000, k: 10, queryCount: 20 }, // Small embeddings
+      { dimension: 384, size: 10_000, k: 10, queryCount: 20 }, // Text embeddings
+      { dimension: 768, size: 10_000, k: 10, queryCount: 20 }, // LLM embeddings
+    ],
+
+    size: [
+      { dimension: 384, size: 1_000, k: 10, queryCount: 20 }, // Small
+      { dimension: 384, size: 10_000, k: 10, queryCount: 20 }, // Medium
+      { dimension: 384, size: 100_000, k: 10, queryCount: 15 }, // Large
+      { dimension: 384, size: 1_000_000, k: 10, queryCount: 10 }, // Very large
+    ],
+
+    k: [
+      { dimension: 384, size: 100_000, k: 10, queryCount: 20 },
+      { dimension: 384, size: 100_000, k: 50, queryCount: 15 },
+      { dimension: 384, size: 100_000, k: 100, queryCount: 10 },
+    ],
+  },
+
+  practicalTests: [
+    // Text search
+    { dimension: 384, size: 100_000, k: 10, queryCount: 20 }, // Medium scale
+    { dimension: 384, size: 1_000_000, k: 10, queryCount: 10 }, // Large scale
+
+    // Image search
+    { dimension: 512, size: 100_000, k: 20, queryCount: 20 }, // Medium scale
+    { dimension: 512, size: 1_000_000, k: 20, queryCount: 10 }, // Large scale
+
+    // Multi-modal
+    { dimension: 1024, size: 50_000, k: 10, queryCount: 15 }, // Combined embeddings
+
+    // Batch search scenarios
+    { dimension: 384, size: 100_000, k: 100, queryCount: 10 }, // Large batch retrieval
+
+    // Dense clusters
+    { dimension: 128, size: 100_000, k: 50, queryCount: 15 }, // Similar items
+  ],
+
+  stressTests: [
+    // High dimension
+    { dimension: 768, size: 100_000, k: 10, queryCount: 10 },
+
+    // Large result set
+    { dimension: 384, size: 100_000, k: 100, queryCount: 10 },
+
+    // Maximum load
+    { dimension: 512, size: 1_000_000, k: 50, queryCount: 5 },
+
+    // Dense search
+    { dimension: 256, size: 1_000_000, k: 100, queryCount: 5 },
+  ],
+
+  smokeTests: [{ dimension: 384, size: 1_000, k: 10, queryCount: 5 }],
 };
+
+export interface TestConfig {
+  dimension: number;
+  size: number;
+  k: number;
+  queryCount: number;
+}
 
 export async function setupTestDB(indexName: string): Promise<PgVector> {
   const connectionString = process.env.DB_URL || `postgresql://postgres:postgres@localhost:5434/mastra`;
@@ -155,8 +214,6 @@ export async function cleanupTestDB(vectorDB: PgVector, indexName: string) {
   await vectorDB.pool.end();
 }
 
-export const HOOK_TIMEOUT = 600000;
-
 export async function warmupQuery(vectorDB: PgVector, indexName: string, dimension: number, k: number) {
   const warmupVector = generateRandomVectors(1, dimension)[0];
   await vectorDB.query(indexName, warmupVector, k);
@@ -168,4 +225,41 @@ export async function measureLatency(fn: () => Promise<any>): Promise<number> {
     const end = process.hrtime.bigint();
     return Number(end - start) / 1e6;
   });
+}
+
+export const getListCount = (result: TestResult): number | undefined => {
+  if (result.indexConfig.type !== 'ivfflat') return undefined;
+  if (result.metrics.latency?.lists) {
+    return result.metrics.latency.lists;
+  }
+  if (typeof result.indexConfig.ivf?.lists === 'function') {
+    return result.indexConfig.ivf.lists(result.size);
+  }
+  return result.indexConfig.ivf?.lists ?? Math.floor(Math.sqrt(result.size));
+};
+
+export function getIndexDescription(indexConfig: IndexConfig): string {
+  if (indexConfig.type === 'hnsw') {
+    return `HNSW(m=${indexConfig.m},ef=${indexConfig.efConstruction})`;
+  }
+
+  if (indexConfig.type === 'ivfflat') {
+    if (typeof indexConfig.ivf?.lists === 'function') {
+      return 'IVF(N/10)';
+    }
+    if (indexConfig.ivf?.lists) {
+      return `IVF(lists=${indexConfig.ivf.lists})`;
+    }
+    return 'IVF(dynamic)';
+  }
+
+  return 'Flat';
+}
+
+export function getSearchEf(k: number, m: number) {
+  return {
+    default: Math.max(k, m * k), // Default calculation
+    lower: Math.max(k, (m * k) / 2), // Lower quality, faster
+    higher: Math.max(k, m * k * 2), // Higher quality, slower
+  };
 }
