@@ -548,6 +548,18 @@ export class WorkflowInstance<TSteps extends Step<any, any, any>[] = any, TTrigg
                   steps: state.context.steps,
                 });
               }
+
+              if (this.#onStepTransition) {
+                this.#onStepTransition.forEach(onTransition => {
+                  onTransition({
+                    runId: this.runId,
+                    value: state.value as Record<string, string>,
+                    context: state.context as WorkflowContext,
+                    activePaths: getActivePathsAndStatus(state.value as Record<string, string>),
+                    timestamp: Date.now(),
+                  });
+                });
+              }
             });
           });
         },

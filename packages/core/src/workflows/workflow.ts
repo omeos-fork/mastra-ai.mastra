@@ -464,7 +464,24 @@ export class Workflow<
       stepId,
     });
 
-    const run = this.#runs.get(runId);
+    const run =
+      this.#runs.get(runId) ??
+      new WorkflowInstance({
+        logger: this.logger,
+        name: this.name,
+        mastra: this.#mastra,
+        retryConfig: this.#retryConfig,
+
+        steps: this.#steps,
+        stepGraph: this.#stepGraph,
+        stepSubscriberGraph: this.#stepSubscriberGraph,
+
+        onStepTransition: this.#onStepTransition,
+        onFinish: () => {
+          this.#runs.delete(run.runId);
+        },
+      });
+
     return run?.execute({
       snapshot: parsedSnapshot,
       stepId,
