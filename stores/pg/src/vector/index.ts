@@ -36,6 +36,66 @@ export class PgVector extends MastraVector {
     return translatedFilter;
   }
 
+  private async getIndexInfo(indexName: string): Promise<{
+    type: 'flat' | 'hnsw' | 'ivfflat';
+    metric: 'cosine' | 'euclidean' | 'dotproduct';
+    config: {
+      m?: number;
+      efConstruction?: number;
+      lists?: number;
+    };
+  }> {
+    const client = await this.pool.connect();
+    try {
+      const indexQuery = `
+        SELECT a.amname as index_type,
+               pg_get_indexdef(i.indexrelid) as index_def,
+               opclass.opcname as operator_class
+        FROM pg_index i
+        JOIN pg_class c ON i.indexrelid = c.oid
+        JOIN pg_am a ON c.relam = a.oid
+        JOIN pg_opclass opclass ON i.indclass[0] = opclass.oid
+        WHERE c.relname = '${indexName}_vector_idx';
+      `;
+
+      const result = await client.query(indexQuery);
+      if (result.rows.length === 0) {
+        return { type: 'flat', metric: 'cosine', config: {} };
+      }
+
+      const { index_type, index_def, operator_class } = result.rows[0];
+
+      // Parse metric type
+      const metric = operator_class.includes('cosine')
+        ? 'cosine'
+        : operator_class.includes('l2')
+          ? 'euclidean'
+          : 'dotproduct';
+
+      // Parse index configuration
+      const config: { m?: number; efConstruction?: number; lists?: number } = {};
+
+      if (index_type === 'hnsw') {
+        const m = index_def.match(/m = (\d+)/)?.[1];
+        const efConstruction = index_def.match(/ef_construction = (\d+)/)?.[1];
+
+        if (m) config.m = parseInt(m);
+        if (efConstruction) config.efConstruction = parseInt(efConstruction);
+      } else if (index_type === 'ivfflat') {
+        const lists = index_def.match(/lists = (\d+)/)?.[1];
+        if (lists) config.lists = parseInt(lists);
+      }
+
+      return {
+        type: index_type as 'flat' | 'hnsw' | 'ivfflat',
+        metric,
+        config,
+      };
+    } finally {
+      client.release();
+    }
+  }
+
   async query(
     indexName: string,
     queryVector: number[],
@@ -43,13 +103,24 @@ export class PgVector extends MastraVector {
     filter?: Filter,
     includeVector: boolean = false,
     minScore: number = 0, // Optional minimum score threshold
+    ef?: number, // Optional ef parameter
   ): Promise<QueryResult[]> {
     const client = await this.pool.connect();
     try {
       const vectorStr = `[${queryVector.join(',')}]`;
-
       const translatedFilter = this.transformFilter(filter);
       const { sql: filterQuery, values: filterValues } = buildFilterQuery(translatedFilter, minScore);
+
+      // Get index type and configuration
+      const indexInfo = await this.getIndexInfo(indexName);
+
+      // Set HNSW search parameter if applicable
+      if (indexInfo.type === 'hnsw') {
+        // Calculate ef and clamp between 1 and 1000
+        const calculatedEf = ef ?? Math.max(topK, (indexInfo.config.m ?? 16) * topK);
+        const searchEf = Math.min(1000, Math.max(1, calculatedEf));
+        await client.query(`SET LOCAL hnsw.ef_search = ${searchEf}`);
+      }
 
       const query = `
         WITH vector_scores AS (
@@ -187,7 +258,8 @@ export class PgVector extends MastraVector {
     const client = await this.pool.connect();
     try {
       await client.query(`DROP INDEX IF EXISTS ${indexName}_vector_idx`);
-      // If type is 'flat', don't create an index
+
+      // If type is 'flat', don't create a new index
       if (indexConfig.type === 'flat') {
         return;
       }
@@ -200,7 +272,6 @@ export class PgVector extends MastraVector {
       if (indexConfig.type === 'hnsw') {
         const m = indexConfig.hnsw?.m ?? 16;
         const efConstruction = indexConfig.hnsw?.efConstruction ?? 64;
-        const ef = indexConfig.hnsw?.ef ?? 40;
 
         indexSQL = `
           CREATE INDEX ${indexName}_vector_idx 
@@ -208,8 +279,7 @@ export class PgVector extends MastraVector {
           USING hnsw (embedding ${metricOp})
           WITH (
             m = ${m},
-            ef_construction = ${efConstruction},
-            ef = ${ef}
+            ef_construction = ${efConstruction}
           )
         `;
       } else {
@@ -243,53 +313,12 @@ export class PgVector extends MastraVector {
     }
   }
 
-  // Update reoptimizeIndex to pass the current index configuration
   async reoptimizeIndex(indexName: string): Promise<void> {
-    // Get current index configuration
-    const client = await this.pool.connect();
-    try {
-      const indexQuery = `
-        SELECT a.amname as index_type,
-               pg_get_indexdef(i.indexrelid) as index_def
-        FROM pg_index i
-        JOIN pg_class c ON i.indexrelid = c.oid
-        JOIN pg_am a ON c.relam = a.oid
-        WHERE c.relname = '${indexName}_vector_idx';
-      `;
-
-      const result = await client.query(indexQuery);
-      if (result.rows.length > 0) {
-        const indexType = result.rows[0].index_type;
-        const indexDef = result.rows[0].index_def;
-
-        // Parse existing configuration
-        const config: IndexConfig = { type: indexType as IndexType };
-
-        if (indexType === 'hnsw') {
-          const m = indexDef.match(/m = (\d+)/)?.[1];
-          const ef = indexDef.match(/ef = (\d+)/)?.[1];
-          const efConstruction = indexDef.match(/ef_construction = (\d+)/)?.[1];
-
-          config.hnsw = {
-            m: m ? parseInt(m) : undefined,
-            ef: ef ? parseInt(ef) : undefined,
-            efConstruction: efConstruction ? parseInt(efConstruction) : undefined,
-          };
-        } else if (indexType === 'ivfflat') {
-          const lists = indexDef.match(/lists = (\d+)/)?.[1];
-          config.ivf = {
-            lists: lists ? parseInt(lists) : undefined,
-          };
-        }
-
-        // Get metric type
-        const metric = indexDef.includes('cosine') ? 'cosine' : indexDef.includes('l2') ? 'euclidean' : 'dotproduct';
-
-        await this.configureIndex(indexName, metric, config);
-      }
-    } finally {
-      client.release();
-    }
+    const indexInfo = await this.getIndexInfo(indexName);
+    await this.configureIndex(indexName, indexInfo.metric, {
+      type: indexInfo.type,
+      ...(indexInfo.type === 'hnsw' ? { hnsw: indexInfo.config } : { ivf: { lists: indexInfo.config.lists } }),
+    });
   }
 
   async listIndexes(): Promise<string[]> {

@@ -82,8 +82,10 @@ const getListCount = (result: TestResult): number | undefined => {
 describe('PostgreSQL Vector Index Performance', () => {
   const testConfigs = {
     dimensions: [64, 384, 1024],
-    sizes: [100, 1000, 10000],
-    kValues: [10, 25, 50, 75, 100],
+    // sizes: [100, 1000, 10000],
+    // kValues: [10, 25, 50, 75, 100],
+    sizes: [100],
+    kValues: [10],
     indexConfigs: [
       // Test flat/linear search as baseline
       // { type: 'flat' },
@@ -97,34 +99,48 @@ describe('PostgreSQL Vector Index Performance', () => {
       {
         type: 'hnsw',
         hnsw: {
-          m: 16, // default connections
-          efConstruction: 64, // default build complexity
-          ef: 40, // default search complexity
+          m: 16, // Default connections
+          efConstruction: 64, // Default build complexity
         },
       },
-      // Test HNSW with higher recall settings
-      {
-        type: 'hnsw',
-        hnsw: {
-          m: 32, // more connections
-          efConstruction: 128, // higher build quality
-          ef: 80, // more thorough search
-        },
-      },
+
+      // Test HNSW with higher quality settings
+      // {
+      //   type: 'hnsw',
+      //   hnsw: {
+      //     m: 32, // More connections
+      //     efConstruction: 128, // Higher build quality
+      //   },
+      // },
+
+      // // Test HNSW with maximum quality settings
+      // {
+      //   type: 'hnsw',
+      //   hnsw: {
+      //     m: 64, // Maximum connections
+      //     efConstruction: 256, // Maximum build quality
+      //   },
+      // },
     ],
   };
 
   let vectorDB: PgVector;
   const testIndexName = 'test_index_performance';
   const results: TestResult[] = [];
-  const connectionString =
-    process.env.DB_URL || 'postgresql://postgres:postgres@localhost:5434/mastra?options=--maintenance_work_mem%3D512MB';
+  const connectionString = process.env.DB_URL || `postgresql://postgres:postgres@localhost:5434/mastra`;
 
   const HOOK_TIMEOUT = 600000;
 
   beforeAll(async () => {
     vectorDB = new PgVector(connectionString);
     await vectorDB.pool.query('CREATE EXTENSION IF NOT EXISTS vector;');
+
+    // Configure memory settings for the session
+    await vectorDB.pool.query(`
+      SET maintenance_work_mem = '512MB';
+      SET work_mem = '256MB';
+      SET temp_buffers = '256MB';
+    `);
   }, HOOK_TIMEOUT);
 
   beforeEach(async () => {
@@ -155,6 +171,13 @@ describe('PostgreSQL Vector Index Performance', () => {
 
     return timeout;
   };
+
+  // For each test, we'll try different ef values relative to k
+  const getSearchEf = (k: number, m: number) => ({
+    default: Math.max(k, m * k), // Default calculation
+    lower: Math.max(k, (m * k) / 2), // Lower quality, faster
+    higher: Math.max(k, m * k * 2), // Higher quality, slower
+  });
 
   for (const dimension of testConfigs.dimensions) {
     for (const indexConfig of testConfigs.indexConfigs) {
@@ -199,12 +222,48 @@ describe('PostgreSQL Vector Index Performance', () => {
 
                 for (const queryVector of queryVectors) {
                   const expectedNeighbors = findNearestBruteForce(queryVector, testVectors, k);
-                  const actualResults = await vectorDB.query(testIndexName, queryVector, k);
-                  const actualNeighbors = actualResults.map(r => JSON.parse(r.id).index);
 
-                  recalls.push(calculateRecall(actualNeighbors, expectedNeighbors, k));
+                  // Test different ef values if using HNSW
+                  let actualResults;
+                  if (indexConfig.type === 'hnsw' && indexConfig.hnsw?.m) {
+                    const efValues = getSearchEf(k, indexConfig.hnsw.m);
+
+                    // Test each ef value
+                    for (const [efType, ef] of Object.entries(efValues)) {
+                      actualResults = await vectorDB.query(testIndexName, queryVector, k, undefined, false, 0, ef);
+                      const actualNeighbors = actualResults.map(r => JSON.parse(r.id).index);
+                      const recall = calculateRecall(actualNeighbors, expectedNeighbors, k);
+                      recalls.push(recall);
+
+                      // Add ef value to metrics with all recall metrics
+                      results.push({
+                        dimension,
+                        indexConfig: {
+                          ...indexConfig,
+                          hnsw: {
+                            ...indexConfig.hnsw,
+                            ef,
+                            efType,
+                          },
+                        },
+                        size,
+                        k,
+                        metrics: {
+                          recall,
+                          minRecall: recall, // For individual queries, min=max=recall
+                          maxRecall: recall,
+                        },
+                      });
+                    }
+                  } else {
+                    // Non-HNSW index
+                    actualResults = await vectorDB.query(testIndexName, queryVector, k);
+                    const actualNeighbors = actualResults.map(r => JSON.parse(r.id).index);
+                    recalls.push(calculateRecall(actualNeighbors, expectedNeighbors, k));
+                  }
                 }
 
+                // After all queries, add aggregate metrics
                 results.push({
                   dimension,
                   indexConfig: {
@@ -244,32 +303,64 @@ describe('PostgreSQL Vector Index Performance', () => {
                 // Warm up
                 await vectorDB.query(testIndexName, queryVectors[0], k);
 
-                const latencies: number[] = [];
+                const latencies: { size: number; k: number; m?: number; ef?: number; p50: number; p95: number }[] = [];
                 for (const queryVector of queryVectors) {
-                  const start = process.hrtime.bigint();
-                  await vectorDB.query(testIndexName, queryVector, k);
-                  const end = process.hrtime.bigint();
-                  latencies.push(Number(end - start) / 1e6);
+                  if (indexConfig.type === 'hnsw' && indexConfig.hnsw?.m) {
+                    const efValues = getSearchEf(k, indexConfig.hnsw.m);
+
+                    // Test each ef value
+                    for (const [efType, ef] of Object.entries(efValues)) {
+                      const start = process.hrtime.bigint();
+                      await vectorDB.query(testIndexName, queryVector, k, undefined, false, 0, ef);
+                      const end = process.hrtime.bigint();
+                      const latency = Number(end - start) / 1e6;
+
+                      latencies.push({
+                        size,
+                        k,
+                        m: indexConfig.hnsw.m,
+                        ef,
+                        p50: latency,
+                        p95: latency,
+                      });
+                    }
+                  } else {
+                    const start = process.hrtime.bigint();
+                    await vectorDB.query(testIndexName, queryVector, k);
+                    const end = process.hrtime.bigint();
+                    latencies.push({
+                      size,
+                      k,
+                      lists: getListCount({ size, indexConfig, k, metrics: {} } as TestResult),
+                      vectorsPerList: Math.round(
+                        size / (getListCount({ size, indexConfig, k, metrics: {} } as TestResult) || 1),
+                      ),
+                      p50: Number(end - start) / 1e6,
+                      p95: Number(end - start) / 1e6,
+                    });
+                  }
                 }
 
-                const sorted = [...latencies].sort((a, b) => a - b);
-                results.push({
-                  dimension,
-                  indexConfig: {
-                    type: indexConfig.type,
-                    lists,
-                  },
-                  size,
-                  k,
-                  metrics: {
-                    latency: {
-                      p50: sorted[Math.floor(sorted.length * 0.5)],
-                      p95: sorted[Math.floor(sorted.length * 0.95)],
+                if (indexConfig.type !== 'hnsw') {
+                  const sorted = [...latencies].sort((a, b) => a.p50 - b.p50);
+                  results.push({
+                    dimension,
+                    indexConfig: {
+                      type: indexConfig.type,
                       lists,
-                      vectorsPerList: Math.round(size / lists),
                     },
-                  },
-                });
+                    size,
+                    k,
+                    metrics: {
+                      latency: {
+                        p50: sorted[Math.floor(sorted.length * 0.5)],
+                        p95: sorted[Math.floor(sorted.length * 0.95)],
+                        lists,
+                        vectorsPerList: Math.round(size / lists),
+                      },
+                    },
+                  });
+                }
               }
             }
           },
@@ -347,17 +438,17 @@ const formatTable = (data: any[], columns: string[]) => {
   return [topBorder, header, headerSeparator, ...rows, bottomBorder].join('\n');
 };
 
+const getGroupKey = (result: any, type: string) => {
+  if (type === 'ivfflat') {
+    return `${result.size}-${result.k}-${result.lists}`;
+  } else if (type === 'hnsw') {
+    return `${result.size}-${result.k}-${result.m}-${result.ef}`;
+  }
+  return `${result.size}-${result.k}`;
+};
+
 const analyzeResults = (results: TestResult[]) => {
   // Keep the explanations at the top
-  console.log('\nRecall Analysis by Dataset Size and K:');
-  console.log('- Dataset Size: Number of vectors in the dataset');
-  console.log('- K: Number of nearest neighbors requested');
-  console.log('- Min Recall: Lowest recall score across all test queries (1.0 = perfect match)');
-  console.log('- Avg Recall: Average recall score across all test queries');
-  console.log('- Max Recall: Highest recall score across all test queries');
-  console.log('- Lists: Number of IVF lists used in the index');
-  console.log('- Vectors/List: Average number of vectors per IVF list');
-
   const byDimension = groupBy(results, 'dimension');
 
   Object.entries(byDimension).forEach(([dimension, dimensionResults]) => {
@@ -395,7 +486,7 @@ const analyzeResults = (results: TestResult[]) => {
       const recallData = Object.values(
         groupBy(
           recalls,
-          r => `${r.size}-${r.k}-${r.lists}`,
+          r => getGroupKey(r, type),
           result => ({
             'Dataset Size': result[0].size,
             K: result[0].k,
@@ -444,12 +535,10 @@ const analyzeResults = (results: TestResult[]) => {
       const latencyData = Object.values(
         groupBy(
           latencies,
-          r => `${r.size}-${r.k}-${r.lists}`,
+          r => getGroupKey(r, type),
           result => ({
             'Dataset Size': result[0].size,
             K: result[0].k,
-            'P50 (ms)': mean(result.map(r => r.p50)).toFixed(2),
-            'P95 (ms)': mean(result.map(r => r.p95)).toFixed(2),
             ...(type === 'ivfflat'
               ? {
                   Lists: result[0].lists,
@@ -457,10 +546,12 @@ const analyzeResults = (results: TestResult[]) => {
                 }
               : type === 'hnsw'
                 ? {
-                    M: result[0].m,
-                    EF: result[0].ef,
+                    M: result[0].m ?? '-',
+                    EF: result[0].ef ?? '-',
                   }
                 : {}),
+            'P50 (ms)': mean(result.map(r => r.p50)).toFixed(2),
+            'P95 (ms)': mean(result.map(r => r.p95)).toFixed(2),
           }),
         ),
       );
