@@ -142,22 +142,30 @@ export class WorkflowInstance<TSteps extends Step<any, any, any>[] = any, TTrigg
       attributes: { componentName: this.name, runId: this.runId },
     });
 
-    const machineInput = snapshot
-      ? (snapshot as any).context
-      : {
-          // Maintain the original step results and their output
-          steps: {},
-          triggerData: triggerData || {},
-          attempts: Object.keys(this.#steps).reduce(
-            (acc, stepKey) => {
-              acc[stepKey] = this.#steps[stepKey]?.retryConfig?.attempts || this.#retryConfig?.attempts || 3;
-              return acc;
-            },
-            {} as Record<string, number>,
-          ),
-        };
+    let machineInput = {
+      // Maintain the original step results and their output
+      steps: {},
+      triggerData: triggerData || {},
+      attempts: Object.keys(this.#steps).reduce(
+        (acc, stepKey) => {
+          acc[stepKey] = this.#steps[stepKey]?.retryConfig?.attempts || this.#retryConfig?.attempts || 3;
+          return acc;
+        },
+        {} as Record<string, number>,
+      ),
+    };
+    let stepGraph = this.#stepGraph;
+    let startStepId = 'trigger';
 
-    // TODO: if stepId is provided, we need to figure out the right state machine to start from the #stepSubscriberGraph instead
+    if (snapshot) {
+      const runState = snapshot as unknown as WorkflowRunState;
+      machineInput = runState.context;
+      if (stepId && runState?.suspendedSteps?.[stepId]) {
+        stepGraph = this.#stepSubscriberGraph[runState.suspendedSteps[stepId]] ?? this.#stepGraph;
+        startStepId = stepId;
+      }
+    }
+
     const defaultMachine = new Machine({
       logger: this.logger,
       mastra: this.#mastra,
@@ -166,12 +174,12 @@ export class WorkflowInstance<TSteps extends Step<any, any, any>[] = any, TTrigg
       runId: this.runId,
       steps: this.#steps,
       onStepTransition: this.#onStepTransition,
-      stepGraph: this.#stepGraph,
+      stepGraph,
       executionSpan: this.#executionSpan,
-      startStepId: 'trigger',
+      startStepId,
     });
 
-    this.#machines['trigger'] = defaultMachine;
+    this.#machines[startStepId] = defaultMachine;
 
     const nestedMachines: Promise<any>[] = [];
     defaultMachine.on('spawn-subscriber', ({ parentStepId, context }) => {
