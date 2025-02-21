@@ -1234,4 +1234,69 @@ describe('PgVector', () => {
       });
     });
   });
+
+  describe('Search Parameters', () => {
+    const indexName = 'test_search_params';
+    const vectors = [
+      [1, 0, 0], // Query vector will be closest to this
+      [0.8, 0.2, 0], // Second closest
+      [0, 1, 0], // Third (much further)
+    ];
+
+    describe('HNSW Parameters', () => {
+      beforeAll(async () => {
+        await vectorDB.createIndex(indexName, 3, 'cosine', {
+          type: 'hnsw',
+          hnsw: { m: 16, efConstruction: 64 },
+        });
+        await vectorDB.upsert(indexName, vectors);
+      });
+
+      afterAll(async () => {
+        await vectorDB.deleteIndex(indexName);
+      });
+
+      it('should use default ef value', async () => {
+        const results = await vectorDB.query(indexName, [1, 0, 0], 2);
+        expect(results).toHaveLength(2);
+        expect(results[0]?.score).toBeCloseTo(1, 5);
+        expect(results[1]?.score).toBeGreaterThan(0.9); // Second vector should be close
+      });
+
+      it('should respect custom ef value', async () => {
+        const results = await vectorDB.query(indexName, [1, 0, 0], 2, undefined, undefined, undefined, { ef: 100 });
+        expect(results).toHaveLength(2);
+        expect(results[0]?.score).toBeCloseTo(1, 5);
+        expect(results[1]?.score).toBeGreaterThan(0.9);
+      });
+    });
+
+    describe('IVF Parameters', () => {
+      beforeAll(async () => {
+        await vectorDB.createIndex(indexName, 3, 'cosine', {
+          type: 'ivfflat',
+          ivf: { lists: 2 }, // Small number for test data
+        });
+        await vectorDB.upsert(indexName, vectors);
+      });
+
+      afterAll(async () => {
+        await vectorDB.deleteIndex(indexName);
+      });
+
+      it('should use default probe value', async () => {
+        const results = await vectorDB.query(indexName, [1, 0, 0], 2);
+        expect(results).toHaveLength(2);
+        expect(results[0]?.score).toBeCloseTo(1, 5);
+        expect(results[1]?.score).toBeGreaterThan(0.9);
+      });
+
+      it('should respect custom probe value', async () => {
+        const results = await vectorDB.query(indexName, [1, 0, 0], 2, undefined, undefined, undefined, { probes: 2 });
+        expect(results).toHaveLength(2);
+        expect(results[0]?.score).toBeCloseTo(1, 5);
+        expect(results[1]?.score).toBeGreaterThan(0.9);
+      });
+    });
+  });
 });

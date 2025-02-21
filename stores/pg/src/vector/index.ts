@@ -75,9 +75,8 @@ export class PgVector extends MastraVector {
         await client.query(`SET LOCAL hnsw.ef_search = ${searchEf}`);
       }
 
-      if (indexInfo.type === 'ivfflat') {
-        const probes = options?.probes ?? 1;
-        await client.query(`SET LOCAL ivfflat.probes = ${probes}`);
+      if (indexInfo.type === 'ivfflat' && options?.probes) {
+        await client.query(`SET LOCAL ivfflat.probes = ${options.probes}`);
       }
 
       const query = `
