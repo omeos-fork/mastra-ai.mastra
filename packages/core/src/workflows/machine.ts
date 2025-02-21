@@ -48,6 +48,7 @@ export class Machine<
   #stepGraph: StepGraph;
   #machine!: ReturnType<typeof this.initializeMachine>;
   #runId: string;
+  #startStepId: string;
   name: string;
 
   #onStepTransition: Set<(state: WorkflowRunState) => void | Promise<void>>;
@@ -65,6 +66,7 @@ export class Machine<
     stepGraph,
     retryConfig,
     onStepTransition,
+    startStepId,
   }: {
     logger: Logger;
     mastra?: MastraPrimitives;
@@ -75,6 +77,7 @@ export class Machine<
     stepGraph: StepGraph;
     retryConfig?: RetryConfig;
     onStepTransition: Set<(state: WorkflowRunState) => void | Promise<void>>;
+    startStepId: string;
   }) {
     super();
 
@@ -84,12 +87,12 @@ export class Machine<
     this.logger = logger;
 
     this.#runId = runId;
+    this.#startStepId = startStepId;
     this.name = name;
 
     this.#stepGraph = stepGraph;
     this.#steps = steps;
     this.#retryConfig = retryConfig;
-
     this.initializeMachine();
   }
 
@@ -341,6 +344,7 @@ export class Machine<
           context: resolvedData,
           suspend: async () => {
             console.log('SUSPEND CALLED', stepNode.step.id);
+            this.emit('suspend', { stepId: stepNode.step.id });
             if (this.#actor) {
               // Update context with current result
               context.steps[stepNode.step.id] = {
@@ -348,14 +352,7 @@ export class Machine<
               };
               await this.persistMachineSnapshot();
               this.logger.debug(`Sending SUSPENDED event for step ${stepNode.step.id}`);
-              const snapshot = this.#actor?.getSnapshot();
-              const activePaths = getActivePathsAndStatus(snapshot?.value as Record<string, string>);
-
-              console.log('ACTOR ACTIVE PATHS', stepNode.step.id, activePaths);
-              if (activePaths.find(path => path.stepId === stepNode.step.id)) {
-                console.log('SUSPENDING ACTOR', stepNode.step.id, activePaths);
-                this.#actor?.send({ type: 'SUSPENDED', stepId: stepNode.step.id });
-              }
+              this.#actor?.send({ type: 'SUSPENDED', stepId: stepNode.step.id });
             } else {
               this.logger.debug(`Actor not available for step ${stepNode.step.id}`);
             }

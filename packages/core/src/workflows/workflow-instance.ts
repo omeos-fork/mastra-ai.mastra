@@ -68,6 +68,9 @@ export class WorkflowInstance<TSteps extends Step<any, any, any>[] = any, TTrigg
   #onStepTransition: Set<(state: WorkflowRunState) => void | Promise<void>> = new Set();
   #onFinish?: () => void;
 
+  // indexed by stepId
+  #suspendedMachines: Record<string, Machine> = {};
+
   constructor({
     name,
     logger,
@@ -163,13 +166,12 @@ export class WorkflowInstance<TSteps extends Step<any, any, any>[] = any, TTrigg
       onStepTransition: this.#onStepTransition,
       stepGraph: this.#stepGraph,
       executionSpan: this.#executionSpan,
+      startStepId: stepId ?? 'trigger',
     });
 
     const nestedMachines: Promise<any>[] = [];
     this.#machine.on('spawn-subscriber', ({ parentStepId, context }) => {
-      console.log('event caught', { parentStepId, context });
       if (this.#stepSubscriberGraph[parentStepId]) {
-        console.log('spawning nested machine', parentStepId);
         const machine = new Machine({
           logger: this.logger,
           mastra: this.#mastra,
@@ -179,10 +181,21 @@ export class WorkflowInstance<TSteps extends Step<any, any, any>[] = any, TTrigg
           onStepTransition: this.#onStepTransition,
           stepGraph: this.#stepSubscriberGraph[parentStepId],
           executionSpan: this.#executionSpan,
+          startStepId: parentStepId,
+        });
+
+        machine.on('suspend', ({ stepId }) => {
+          console.log('suspend event caught', { stepId });
+          this.#suspendedMachines[stepId] = machine;
         });
 
         nestedMachines.push(machine.execute({ input: context }));
       }
+    });
+
+    this.#machine.on('suspend', ({ stepId }) => {
+      console.log('suspend event caught', { stepId });
+      this.#suspendedMachines[stepId] = this.#machine;
     });
 
     const { results } = await this.#machine.execute({ snapshot, stepId, input: machineInput });
