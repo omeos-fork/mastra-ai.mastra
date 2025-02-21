@@ -166,7 +166,7 @@ export class WorkflowInstance<TSteps extends Step<any, any, any>[] = any, TTrigg
       onStepTransition: this.#onStepTransition,
       stepGraph: this.#stepGraph,
       executionSpan: this.#executionSpan,
-      startStepId: stepId ?? 'trigger',
+      startStepId: 'trigger',
     });
 
     const nestedMachines: Promise<any>[] = [];
