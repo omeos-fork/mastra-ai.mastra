@@ -249,10 +249,19 @@ export class WorkflowInstance<TSteps extends Step<any, any, any>[] = any, TTrigg
     );
     snapshot.suspendedSteps = suspendedSteps;
 
+    const existingSnapshot = ((await this.#mastra?.storage?.loadWorkflowSnapshot({
+      workflowName: this.name,
+      runId: this.#runId,
+    })) ?? {}) as WorkflowRunState;
+
+    if (existingSnapshot) {
+      Object.assign(existingSnapshot, snapshot);
+    }
+
     await this.#mastra?.storage?.persistWorkflowSnapshot({
       workflowName: this.name,
       runId: this.#runId,
-      snapshot: snapshot,
+      snapshot: existingSnapshot,
     });
   }
 
