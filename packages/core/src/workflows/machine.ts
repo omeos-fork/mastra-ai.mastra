@@ -1,4 +1,5 @@
 import type { Span } from '@opentelemetry/api';
+import EventEmitter from 'node:events';
 import { get } from 'radash';
 import sift from 'sift';
 import { assign, createActor, fromPromise, setup, type MachineContext, type Snapshot } from 'xstate';
@@ -36,7 +37,10 @@ import {
   recursivelyCheckForFinalState,
 } from './utils';
 
-export class Machine<TSteps extends Step<any, any, any>[] = any, TTriggerSchema extends z.ZodType<any> = any> {
+export class Machine<
+  TSteps extends Step<any, any, any>[] = any,
+  TTriggerSchema extends z.ZodType<any> = any,
+> extends EventEmitter {
   logger: Logger;
   #mastra?: MastraPrimitives;
   #executionSpan?: Span | undefined;
@@ -72,6 +76,8 @@ export class Machine<TSteps extends Step<any, any, any>[] = any, TTriggerSchema 
     retryConfig?: RetryConfig;
     onStepTransition: Set<(state: WorkflowRunState) => void | Promise<void>>;
   }) {
+    super();
+
     this.#mastra = mastra;
     this.#onStepTransition = onStepTransition;
     this.#executionSpan = executionSpan;
@@ -88,15 +94,14 @@ export class Machine<TSteps extends Step<any, any, any>[] = any, TTriggerSchema 
   }
 
   async execute({
-    triggerData,
+    input,
     snapshot,
     stepId,
   }: {
     stepId?: string;
-    triggerData?: z.infer<TTriggerSchema>;
+    input?: any;
     snapshot?: Snapshot<any>;
   } = {}): Promise<{
-    triggerData?: z.infer<TTriggerSchema>;
     results: Record<string, StepResult<any>>;
   }> {
     if (snapshot) {
@@ -104,32 +109,17 @@ export class Machine<TSteps extends Step<any, any, any>[] = any, TTriggerSchema 
       this.logger.debug(`Workflow snapshot received`, { runId: this.#runId, snapshot });
     }
 
-    const machineInput = snapshot
-      ? (snapshot as any).context
-      : {
-          // Maintain the original step results and their output
-          steps: {},
-          triggerData: triggerData || {},
-          attempts: Object.keys(this.#steps).reduce(
-            (acc, stepKey) => {
-              acc[stepKey] = this.#steps[stepKey]?.retryConfig?.attempts || this.#retryConfig?.attempts || 3;
-              return acc;
-            },
-            {} as Record<string, number>,
-          ),
-        };
-
-    this.logger.debug(`Machine input prepared`, { runId: this.#runId, machineInput });
+    this.logger.debug(`Machine input prepared`, { runId: this.#runId, input });
 
     const actorSnapshot = snapshot
       ? {
           ...snapshot,
-          context: machineInput,
+          context: input,
         }
       : undefined;
 
     this.logger.debug(`Creating actor with configuration`, {
-      machineInput,
+      input,
       actorSnapshot,
       runId: this.#runId,
       machineStates: this.#machine.config.states,
@@ -143,7 +133,7 @@ export class Machine<TSteps extends Step<any, any, any>[] = any, TTriggerSchema 
           runId: this.#runId,
         });
       },
-      input: machineInput,
+      input,
       snapshot: actorSnapshot,
     });
 
@@ -206,7 +196,6 @@ export class Machine<TSteps extends Step<any, any, any>[] = any, TTriggerSchema 
           this.#cleanup();
           this.#executionSpan?.end();
           resolve({
-            triggerData,
             results: state.context.steps,
           });
         } catch (error) {
@@ -217,7 +206,6 @@ export class Machine<TSteps extends Step<any, any, any>[] = any, TTriggerSchema 
           this.#cleanup();
           this.#executionSpan?.end();
           resolve({
-            triggerData,
             results: state.context.steps,
           });
         }
@@ -456,7 +444,7 @@ export class Machine<TSteps extends Step<any, any, any>[] = any, TTriggerSchema 
           };
         }) => {
           const { parentStepId, context } = input;
-          console.log({ parentStepId, context, input });
+          this.emit('spawn-subscriber', { parentStepId, context });
           return Promise.resolve({ steps: context.steps });
           // TODO: here what we need to actually do is if there are no steps left in this graph we finish executing and the WorkflowInstance needs to
           //  create another machine from the next graph

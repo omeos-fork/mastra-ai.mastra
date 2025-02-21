@@ -139,6 +139,21 @@ export class WorkflowInstance<TSteps extends Step<any, any, any>[] = any, TTrigg
       attributes: { componentName: this.name, runId: this.runId },
     });
 
+    const machineInput = snapshot
+      ? (snapshot as any).context
+      : {
+          // Maintain the original step results and their output
+          steps: {},
+          triggerData: triggerData || {},
+          attempts: Object.keys(this.#steps).reduce(
+            (acc, stepKey) => {
+              acc[stepKey] = this.#steps[stepKey]?.retryConfig?.attempts || this.#retryConfig?.attempts || 3;
+              return acc;
+            },
+            {} as Record<string, number>,
+          ),
+        };
+
     this.#machine = new Machine({
       logger: this.logger,
       mastra: this.#mastra,
@@ -150,7 +165,34 @@ export class WorkflowInstance<TSteps extends Step<any, any, any>[] = any, TTrigg
       executionSpan: this.#executionSpan,
     });
 
-    return this.#machine.execute({ triggerData, snapshot, stepId });
+    const nestedMachines: Promise<any>[] = [];
+    this.#machine.on('spawn-subscriber', ({ parentStepId, context }) => {
+      console.log('event caught', { parentStepId, context });
+      if (this.#stepSubscriberGraph[parentStepId]) {
+        console.log('spawning nested machine', parentStepId);
+        const machine = new Machine({
+          logger: this.logger,
+          mastra: this.#mastra,
+          name: this.name,
+          runId: this.runId,
+          steps: this.#steps,
+          onStepTransition: this.#onStepTransition,
+          stepGraph: this.#stepSubscriberGraph[parentStepId],
+          executionSpan: this.#executionSpan,
+        });
+
+        nestedMachines.push(machine.execute({ input: context }));
+      }
+    });
+
+    const { results } = await this.#machine.execute({ snapshot, stepId, input: machineInput });
+    const nestedResults = (await Promise.all(nestedMachines)).reduce(
+      (acc, { results }) => ({ ...acc, ...results }),
+      {},
+    );
+    const allResults = { ...results, ...nestedResults };
+    console.dir({ results, nestedResults, allResults }, { depth: null });
+    return { results: allResults };
   }
 
   /**
