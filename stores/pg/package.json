@@ -19,6 +19,7 @@
     "build:watch": "pnpm build --watch",
     "pretest": "docker compose up -d && (for i in $(seq 1 30); do docker compose exec -T db pg_isready -U postgres && break || (sleep 1; [ $i -eq 30 ] && exit 1); done)",
     "test": "vitest run",
+    "test:perf": "NODE_OPTIONS='--max-old-space-size=16384' vitest run vector.performance.test.ts",
     "posttest": "docker compose down -v",
     "pretest:watch": "docker compose up -d",
     "test:watch": "vitest watch",

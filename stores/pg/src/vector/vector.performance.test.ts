@@ -42,27 +42,20 @@ describe('PostgreSQL Index Performance', () => {
   let vectorDB: PgVector = new PgVector(connectionString);
   const testIndexName = 'test_index_performance';
   const results: TestResult[] = [];
-  let testVectors: number[][] = [];
-  let queryVectors: number[][] = [];
 
   // IVF and HNSW specific configs
   const indexConfigs: IndexConfig[] = [
-    // { type: 'flat' }, // Test flat/linear search as baseline
-    // { type: 'ivfflat' },
+    { type: 'flat' }, // Test flat/linear search as baseline
+    { type: 'ivfflat' },
     { type: 'ivfflat', ivf: { lists: 100 } }, // Test IVF with fixed lists
-    // { type: 'hnsw', hnsw: { m: 16, efConstruction: 64 } }, // Default settings
-    // { type: 'hnsw', hnsw: { m: 64, efConstruction: 256 } }, // Maximum quality
+    { type: 'hnsw', hnsw: { m: 16, efConstruction: 64 } }, // Default settings
+    { type: 'hnsw', hnsw: { m: 64, efConstruction: 256 } }, // Maximum quality
   ];
   beforeEach(async () => {
     await vectorDB.deleteIndex(testIndexName);
   });
 
   afterEach(async () => {
-    // Clear large arrays
-    testVectors = [];
-    queryVectors = [];
-
-    // Delete test index
     await vectorDB.deleteIndex(testIndexName);
   });
 
@@ -73,12 +66,12 @@ describe('PostgreSQL Index Performance', () => {
 
   // Combine all test configs
   const allConfigs: TestConfig[] = [
-    ...baseTestConfigs.basicTests.dimension,
-    ...baseTestConfigs.basicTests.size,
-    ...baseTestConfigs.basicTests.k,
-    ...baseTestConfigs.practicalTests,
+    // ...baseTestConfigs.basicTests.dimension,
+    // ...baseTestConfigs.basicTests.size,
+    // ...baseTestConfigs.basicTests.k,
+    // ...baseTestConfigs.practicalTests,
     ...baseTestConfigs.stressTests,
-    ...baseTestConfigs.smokeTests,
+    // ...baseTestConfigs.smokeTests,
   ];
 
   // For each index config
@@ -91,8 +84,8 @@ describe('PostgreSQL Index Performance', () => {
         it(
           testDesc,
           async () => {
-            testVectors = generateRandomVectors(testConfig.size, testConfig.dimension);
-            queryVectors = generateRandomVectors(testConfig.queryCount, testConfig.dimension);
+            const testVectors = generateRandomVectors(testConfig.size, testConfig.dimension);
+            const queryVectors = generateRandomVectors(testConfig.queryCount, testConfig.dimension);
             const vectorIds = testVectors.map((_, idx) => `vec_${idx}`);
             const metadata = testVectors.map((_, idx) => ({ index: idx }));
 
