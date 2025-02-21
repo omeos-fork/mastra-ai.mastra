@@ -2,7 +2,6 @@ import { MastraBase } from '../base';
 import { InstrumentClass } from '../telemetry';
 
 interface BuiltInModelConfig {
-  provider: string;
   name: string;
   apiKey?: string;
 }
@@ -37,7 +36,6 @@ export abstract class MastraVoice extends MastraBase {
         spanName: `voice.${methodName}`,
         attributes: {
           'voice.type': this.speechModel?.name || this.listeningModel?.name || 'unknown',
-          'voice.provider': this.speechModel?.provider || this.listeningModel?.provider || 'unknown',
         },
       }) ?? method
     );
