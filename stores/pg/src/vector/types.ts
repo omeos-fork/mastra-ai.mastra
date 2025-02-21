@@ -8,7 +8,6 @@ interface IVFConfig {
 interface HNSWConfig {
   m?: number; // Max number of connections (default: 16)
   efConstruction?: number; // Build-time complexity (default: 64)
-  ef?: number; // Search-time complexity (default: 40)
 }
 
 export interface IndexConfig {
