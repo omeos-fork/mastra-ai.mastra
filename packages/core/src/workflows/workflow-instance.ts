@@ -161,6 +161,7 @@ export class WorkflowInstance<TSteps extends Step<any, any, any>[] = any, TTrigg
     const defaultMachine = new Machine({
       logger: this.logger,
       mastra: this.#mastra,
+      workflowInstance: this,
       name: this.name,
       runId: this.runId,
       steps: this.#steps,
@@ -178,6 +179,7 @@ export class WorkflowInstance<TSteps extends Step<any, any, any>[] = any, TTrigg
         const machine = new Machine({
           logger: this.logger,
           mastra: this.#mastra,
+          workflowInstance: this,
           name: this.name,
           runId: this.runId,
           steps: this.#steps,
@@ -214,9 +216,27 @@ export class WorkflowInstance<TSteps extends Step<any, any, any>[] = any, TTrigg
   /**
    * Persists the workflow state to the database
    */
-  async #persistWorkflowSnapshot() {
-    // TODO: persist all the machine snapshots
-    return this.#machines['trigger']?.persistMachineSnapshot();
+  async persistWorkflowSnapshot(): Promise<void> {
+    const machineSnapshots: Record<string, WorkflowRunState> = {};
+    for (const [stepId, machine] of Object.entries(this.#machines)) {
+      machineSnapshots[stepId] = machine.getSnapshot() as unknown as WorkflowRunState;
+    }
+
+    const snapshot = machineSnapshots['trigger'] as unknown as WorkflowRunState;
+    delete machineSnapshots['trigger'];
+
+    if (!snapshot) {
+      this.logger.debug('Snapshot cannot be persisted. No snapshot received.', { runId: this.#runId });
+      return;
+    }
+
+    snapshot.childStates = machineSnapshots;
+
+    await this.#mastra?.storage?.persistWorkflowSnapshot({
+      workflowName: this.name,
+      runId: this.#runId,
+      snapshot: snapshot,
+    });
   }
 
   async getState(): Promise<WorkflowRunState | null> {

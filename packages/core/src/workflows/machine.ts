@@ -36,6 +36,7 @@ import {
   isTransitionEvent,
   recursivelyCheckForFinalState,
 } from './utils';
+import type { WorkflowInstance } from './workflow-instance';
 
 export class Machine<
   TSteps extends Step<any, any, any>[] = any,
@@ -43,6 +44,7 @@ export class Machine<
 > extends EventEmitter {
   logger: Logger;
   #mastra?: MastraPrimitives;
+  #workflowInstance: WorkflowInstance;
   #executionSpan?: Span | undefined;
 
   #stepGraph: StepGraph;
@@ -59,6 +61,7 @@ export class Machine<
   constructor({
     logger,
     mastra,
+    workflowInstance,
     executionSpan,
     name,
     runId,
@@ -70,6 +73,7 @@ export class Machine<
   }: {
     logger: Logger;
     mastra?: MastraPrimitives;
+    workflowInstance: WorkflowInstance;
     executionSpan?: Span;
     name: string;
     runId: string;
@@ -82,6 +86,7 @@ export class Machine<
     super();
 
     this.#mastra = mastra;
+    this.#workflowInstance = workflowInstance;
     this.#onStepTransition = onStepTransition;
     this.#executionSpan = executionSpan;
     this.logger = logger;
@@ -299,30 +304,8 @@ export class Machine<
     };
   }
 
-  async persistMachineSnapshot() {
-    const snapshotFromActor = this.#actor?.getPersistedSnapshot();
-
-    if (!this.#mastra?.storage) {
-      this.logger.debug('Snapshot cannot be persisted. Mastra engine is not initialized', {
-        runId: this.#runId,
-      });
-      return;
-    }
-
-    if (!snapshotFromActor) {
-      this.logger.debug('Snapshot cannot be persisted. No snapshot received.', { runId: this.#runId });
-      return;
-    }
-
-    const snapshot = snapshotFromActor as unknown as WorkflowRunState;
-
-    await this.#mastra.storage.persistWorkflowSnapshot({
-      workflowName: this.name,
-      runId: this.#runId,
-      snapshot,
-    });
-
-    return this.#runId;
+  async persistMachineSnapshot(): Promise<void> {
+    await this.#workflowInstance.persistWorkflowSnapshot();
   }
 
   #getDefaultActors() {

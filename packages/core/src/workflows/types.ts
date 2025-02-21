@@ -342,5 +342,5 @@ export interface WorkflowRunState {
   runId: string;
   timestamp: number;
 
-  childStates?: WorkflowRunState[];
+  childStates?: Record<string, WorkflowRunState>;
 }
