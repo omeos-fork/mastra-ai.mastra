@@ -4,7 +4,6 @@ import { PassThrough } from 'stream';
 
 type OpenAIVoiceId = 'alloy' | 'echo' | 'fable' | 'onyx' | 'nova' | 'shimmer' | 'ash' | 'coral' | 'sage';
 type OpenAIModel = 'tts-1' | 'tts-1-hd' | 'whisper-1';
-type OpenAIFileType = 'mp3' | 'mp4' | 'mpeg' | 'mpga' | 'm4a' | 'wav' | 'webm';
 
 export interface OpenAIConfig {
   name?: OpenAIModel;
@@ -20,46 +19,6 @@ export interface OpenAIVoiceConfig {
   listening?: {
     model: 'whisper-1';
     apiKey?: string;
-    language?: string;
-  };
-}
-
-export interface OpenAIVoiceCapabilities {
-  speak?: (
-    input: string | NodeJS.ReadableStream,
-    options?: { speaker?: string; speed?: number },
-  ) => Promise<NodeJS.ReadableStream>;
-  listen?: (
-    audioStream: NodeJS.ReadableStream,
-    options: { filetype: OpenAIFileType; [key: string]: any },
-  ) => Promise<string>;
-  getSpeakers?: () => Promise<Array<{ voiceId: OpenAIVoiceId }>>;
-}
-
-/**
- * Creates OpenAI voice capabilities
- */
-export function createOpenAIVoice(config?: OpenAIVoiceConfig): OpenAIVoiceCapabilities {
-  const provider = new OpenAIVoice({
-    speechModel: config?.speech
-      ? {
-          name: config.speech.model,
-          apiKey: config.speech.apiKey,
-        }
-      : undefined,
-    listeningModel: config?.listening
-      ? {
-          name: config.listening.model,
-          apiKey: config.listening.apiKey,
-        }
-      : undefined,
-    speaker: config?.speech?.speaker,
-  });
-
-  return {
-    speak: config?.speech ? provider.speak.bind(provider) : undefined,
-    listen: config?.listening ? provider.listen.bind(provider) : undefined,
-    getSpeakers: config?.speech ? provider.getSpeakers.bind(provider) : undefined,
   };
 }
 
@@ -67,6 +26,15 @@ export class OpenAIVoice extends MastraVoice {
   speechClient?: OpenAI;
   listeningClient?: OpenAI;
 
+  /**
+   * Constructs an instance of OpenAIVoice with optional configurations for speech and listening models.
+   *
+   * @param {Object} [config] - Configuration options for the OpenAIVoice instance.
+   * @param {OpenAIConfig} [config.listeningModel] - Configuration for the listening model, including model name and API key.
+   * @param {OpenAIConfig} [config.speechModel] - Configuration for the speech model, including model name and API key.
+   * @param {string} [config.speaker] - The default speaker's voice to use for speech synthesis.
+   * @throws {Error} - Throws an error if no API key is provided for either the speech or listening model.
+   */
   constructor({
     listeningModel,
     speechModel,
@@ -75,42 +43,53 @@ export class OpenAIVoice extends MastraVoice {
     listeningModel?: OpenAIConfig;
     speechModel?: OpenAIConfig;
     speaker?: string;
-  }) {
+  } = {}) {
+    const defaultApiKey = process.env.OPENAI_API_KEY;
+    const defaultSpeechModel = {
+      name: 'tts-1',
+      apiKey: defaultApiKey,
+    };
+    const defaultListeningModel = {
+      name: 'whisper-1',
+      apiKey: defaultApiKey,
+    };
+
     super({
-      speechModel: speechModel && {
-        name: speechModel.name || 'tts-1',
-        apiKey: speechModel.apiKey,
+      speechModel: {
+        name: speechModel?.name ?? defaultSpeechModel.name,
+        apiKey: speechModel?.apiKey ?? defaultSpeechModel.apiKey,
       },
-      listeningModel: listeningModel && {
-        name: listeningModel.name || 'whisper-1',
-        apiKey: listeningModel.apiKey,
+      listeningModel: {
+        name: listeningModel?.name ?? defaultListeningModel.name,
+        apiKey: listeningModel?.apiKey ?? defaultListeningModel.apiKey,
       },
-      speaker,
+      speaker: speaker ?? 'alloy',
     });
 
-    const defaultApiKey = process.env.OPENAI_API_KEY;
-
-    if (speechModel || defaultApiKey) {
-      const speechApiKey = speechModel?.apiKey || defaultApiKey;
-      if (!speechApiKey) {
-        throw new Error('No API key provided for speech model');
-      }
-      this.speechClient = new OpenAI({ apiKey: speechApiKey });
+    const speechApiKey = speechModel?.apiKey || defaultApiKey;
+    if (!speechApiKey) {
+      throw new Error('No API key provided for speech model');
     }
+    this.speechClient = new OpenAI({ apiKey: speechApiKey });
 
-    if (listeningModel || defaultApiKey) {
-      const listeningApiKey = listeningModel?.apiKey || defaultApiKey;
-      if (!listeningApiKey) {
-        throw new Error('No API key provided for listening model');
-      }
-      this.listeningClient = new OpenAI({ apiKey: listeningApiKey });
+    const listeningApiKey = listeningModel?.apiKey || defaultApiKey;
+    if (!listeningApiKey) {
+      throw new Error('No API key provided for listening model');
     }
+    this.listeningClient = new OpenAI({ apiKey: listeningApiKey });
 
     if (!this.speechClient && !this.listeningClient) {
       throw new Error('At least one of OPENAI_API_KEY, speechModel.apiKey, or listeningModel.apiKey must be set');
     }
   }
 
+  /**
+   * Retrieves a list of available speakers for the speech model.
+   *
+   * @returns {Promise<Array<{ voiceId: OpenAIVoiceId }>>} - A promise that resolves to an array of objects,
+   * each containing a `voiceId` representing an available speaker.
+   * @throws {Error} - Throws an error if the speech model is not configured.
+   */
   async getSpeakers(): Promise<Array<{ voiceId: OpenAIVoiceId }>> {
     if (!this.speechModel) {
       throw new Error('Speech model not configured');
@@ -129,6 +108,16 @@ export class OpenAIVoice extends MastraVoice {
     ];
   }
 
+  /**
+   * Converts text or audio input into speech using the configured speech model.
+   *
+   * @param {string | NodeJS.ReadableStream} input - The text or audio stream to be converted into speech.
+   * @param {Object} [options] - Optional parameters for the speech synthesis.
+   * @param {string} [options.speaker] - The speaker's voice to use for the speech synthesis.
+   * @param {number} [options.speed] - The speed at which the speech should be synthesized.
+   * @returns {Promise<NodeJS.ReadableStream>} - A promise that resolves to a readable stream of the synthesized audio.
+   * @throws {Error} - Throws an error if the speech model is not configured or if the input text is empty.
+   */
   async speak(
     input: string | NodeJS.ReadableStream,
     options?: {
@@ -155,8 +144,8 @@ export class OpenAIVoice extends MastraVoice {
 
     const audio = await this.traced(async () => {
       const response = await this.speechClient!.audio.speech.create({
-        model: this.speechModel?.name || 'tts-1',
-        voice: (options?.speaker || 'alloy') as OpenAIVoiceId,
+        model: this.speechModel?.name ?? 'tts-1',
+        voice: (options?.speaker ?? this.speaker) as OpenAIVoiceId,
         input,
         speed: options?.speed || 1.0,
       });
@@ -170,10 +159,20 @@ export class OpenAIVoice extends MastraVoice {
     return audio;
   }
 
+  /**
+   * Transcribes audio from a given stream using the configured listening model.
+   *
+   * @param {NodeJS.ReadableStream} audioStream - The audio stream to be transcribed.
+   * @param {Object} [options] - Optional parameters for the transcription.
+   * @param {string} [options.filetype] - The file type of the audio stream.
+   *                                      Supported types include 'mp3', 'mp4', 'mpeg', 'mpga', 'm4a', 'wav', 'webm'.
+   * @returns {Promise<string>} - A promise that resolves to the transcribed text.
+   * @throws {Error} - Throws an error if the listening model is not configured.
+   */
   async listen(
     audioStream: NodeJS.ReadableStream,
-    options: {
-      filetype: 'mp3' | 'mp4' | 'mpeg' | 'mpga' | 'm4a' | 'wav' | 'webm';
+    options?: {
+      filetype?: 'mp3' | 'mp4' | 'mpeg' | 'mpga' | 'm4a' | 'wav' | 'webm';
       [key: string]: any;
     },
   ): Promise<string> {
@@ -189,7 +188,7 @@ export class OpenAIVoice extends MastraVoice {
 
     const text = await this.traced(async () => {
       const { filetype, ...otherOptions } = options || {};
-      const file = new File([audioBuffer], `audio.${filetype}`);
+      const file = new File([audioBuffer], `audio.${filetype || 'mp3'}`);
 
       const response = await this.listeningClient!.audio.transcriptions.create({
         model: this.listeningModel?.name || 'whisper-1',

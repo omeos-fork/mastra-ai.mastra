@@ -1,119 +1,15 @@
 import { writeFileSync, mkdirSync, createReadStream } from 'fs';
 import path from 'path';
 import { PassThrough } from 'stream';
-import { describe, expect, it, beforeAll, beforeEach } from 'vitest';
+import { describe, expect, it, beforeAll } from 'vitest';
 
-import { createOpenAIVoice, OpenAIVoice } from './index.js';
-
-describe('createOpenAIVoice', () => {
-  const outputDir = path.join(process.cwd(), 'test-outputs');
-  let apiKey: string;
-
-  beforeAll(() => {
-    try {
-      mkdirSync(outputDir, { recursive: true });
-    } catch (err) {
-      // Ignore if directory already exists
-    }
-  });
-
-  beforeEach(() => {
-    apiKey = process.env.OPENAI_API_KEY || '';
-  });
-
-  it('should create voice with speech capabilities and generate audio', async () => {
-    const voice = createOpenAIVoice({
-      speech: {
-        model: 'tts-1',
-        speaker: 'alloy',
-      },
-    });
-
-    expect(voice.speak).toBeDefined();
-    expect(voice.getSpeakers).toBeDefined();
-    expect(voice.listen).toBeUndefined();
-
-    const audioStream = await voice.speak!('Testing speech capabilities');
-    const chunks: Buffer[] = [];
-    for await (const chunk of audioStream) {
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    }
-    const audioBuffer = Buffer.concat(chunks);
-
-    expect(audioBuffer.length).toBeGreaterThan(0);
-    writeFileSync(path.join(outputDir, 'factory-speech-test.mp3'), audioBuffer);
-  }, 10000);
-
-  it('should create voice with listening capabilities and transcribe audio', async () => {
-    const speechVoice = createOpenAIVoice({
-      speech: { model: 'tts-1' },
-    });
-
-    const audioStream = await speechVoice.speak!('Testing transcription capabilities');
-    const voice = createOpenAIVoice({
-      listening: {
-        model: 'whisper-1',
-      },
-    });
-
-    expect(voice.listen).toBeDefined();
-    expect(voice.speak).toBeUndefined();
-
-    const text = await voice.listen!(audioStream, { filetype: 'mp3' });
-    expect(text.toLowerCase()).toContain('testing');
-    expect(text.toLowerCase()).toContain('transcription');
-  }, 15000);
-
-  it('should create voice with both capabilities and round-trip audio', async () => {
-    const voice = createOpenAIVoice({
-      speech: {
-        model: 'tts-1',
-        speaker: 'alloy',
-      },
-      listening: {
-        model: 'whisper-1',
-      },
-    });
-
-    expect(voice.speak).toBeDefined();
-    expect(voice.listen).toBeDefined();
-
-    const originalText = 'Testing both speech and listening capabilities';
-    const audioStream = await voice.speak!(originalText);
-    const transcribedText = await voice.listen!(audioStream, { filetype: 'mp3' });
-
-    expect(transcribedText.toLowerCase()).toContain('testing');
-    expect(transcribedText.toLowerCase()).toContain('capabilities');
-  }, 20000);
-
-  it('should list available speakers', async () => {
-    const voice = createOpenAIVoice({
-      speech: {
-        model: 'tts-1',
-      },
-    });
-
-    const speakers = await voice.getSpeakers!();
-    expect(speakers).toContainEqual({ voiceId: 'alloy' });
-    expect(speakers).toContainEqual({ voiceId: 'nova' });
-    expect(speakers.length).toBeGreaterThan(0);
-  });
-
-  it('should create voice without any capabilities', () => {
-    const voice = createOpenAIVoice();
-
-    expect(voice.speak).toBeUndefined();
-    expect(voice.listen).toBeUndefined();
-    expect(voice.getSpeakers).toBeUndefined();
-  });
-});
+import { OpenAIVoice } from './index.js';
 
 describe('OpenAIVoice Integration Tests', () => {
   let voice: OpenAIVoice;
   const outputDir = path.join(process.cwd(), 'test-outputs');
 
   beforeAll(() => {
-    // Create output directory if it doesn't exist
     try {
       mkdirSync(outputDir, { recursive: true });
     } catch (err) {
@@ -138,7 +34,27 @@ describe('OpenAIVoice Integration Tests', () => {
     });
   });
 
+  it('should initialize with default parameters', async () => {
+    const defaultVoice = new OpenAIVoice();
+    const speakers = await defaultVoice.getSpeakers();
+    expect(speakers).toBeInstanceOf(Array);
+    expect(speakers.length).toBeGreaterThan(0);
+  });
+
   describe('speak', () => {
+    it('should speak with default parameters', async () => {
+      const defaultVoice = new OpenAIVoice();
+      const audioStream = await defaultVoice.speak('Hello with defaults');
+
+      const chunks: Buffer[] = [];
+      for await (const chunk of audioStream) {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      }
+      const audioBuffer = Buffer.concat(chunks);
+
+      expect(audioBuffer.length).toBeGreaterThan(0);
+    });
+
     it('should generate audio stream from text', async () => {
       const audioStream = await voice.speak('Hello World', {
         speaker: 'alloy',
@@ -196,6 +112,17 @@ describe('OpenAIVoice Integration Tests', () => {
   });
 
   describe('listen', () => {
+    it('should listen with default parameters', async () => {
+      const defaultVoice = new OpenAIVoice();
+      const audioStream = await defaultVoice.speak('Listening test with defaults');
+
+      const text = await defaultVoice.listen(audioStream);
+
+      expect(text).toBeTruthy();
+      expect(typeof text).toBe('string');
+      expect(text.toLowerCase()).toContain('listening test');
+    });
+
     it('should transcribe audio from fixture file', async () => {
       const fixturePath = path.join(process.cwd(), '__fixtures__', 'voice-test.m4a');
       const audioStream = createReadStream(fixturePath);
