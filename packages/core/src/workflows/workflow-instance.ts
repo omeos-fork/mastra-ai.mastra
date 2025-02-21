@@ -52,7 +52,7 @@ export class WorkflowInstance<TSteps extends Step<any, any, any>[] = any, TTrigg
 {
   name: string;
   #mastra?: MastraPrimitives;
-  #machine!: Machine<TSteps, TTriggerSchema>;
+  #machines: Record<string, Machine<TSteps, TTriggerSchema>> = {};
 
   logger: Logger;
 
@@ -157,7 +157,8 @@ export class WorkflowInstance<TSteps extends Step<any, any, any>[] = any, TTrigg
           ),
         };
 
-    this.#machine = new Machine({
+    // TODO: if stepId is provided, we need to figure out the right state machine to start from the #stepSubscriberGraph instead
+    const defaultMachine = new Machine({
       logger: this.logger,
       mastra: this.#mastra,
       name: this.name,
@@ -169,8 +170,10 @@ export class WorkflowInstance<TSteps extends Step<any, any, any>[] = any, TTrigg
       startStepId: 'trigger',
     });
 
+    this.#machines['trigger'] = defaultMachine;
+
     const nestedMachines: Promise<any>[] = [];
-    this.#machine.on('spawn-subscriber', ({ parentStepId, context }) => {
+    defaultMachine.on('spawn-subscriber', ({ parentStepId, context }) => {
       if (this.#stepSubscriberGraph[parentStepId]) {
         const machine = new Machine({
           logger: this.logger,
@@ -193,12 +196,12 @@ export class WorkflowInstance<TSteps extends Step<any, any, any>[] = any, TTrigg
       }
     });
 
-    this.#machine.on('suspend', ({ stepId }) => {
+    defaultMachine.on('suspend', ({ stepId }) => {
       console.log('suspend event caught', { stepId });
-      this.#suspendedMachines[stepId] = this.#machine;
+      this.#suspendedMachines[stepId] = defaultMachine;
     });
 
-    const { results } = await this.#machine.execute({ snapshot, stepId, input: machineInput });
+    const { results } = await defaultMachine.execute({ snapshot, stepId, input: machineInput });
     const nestedResults = (await Promise.all(nestedMachines)).reduce(
       (acc, { results }) => ({ ...acc, ...results }),
       {},
@@ -212,15 +215,17 @@ export class WorkflowInstance<TSteps extends Step<any, any, any>[] = any, TTrigg
    * Persists the workflow state to the database
    */
   async #persistWorkflowSnapshot() {
-    return this.#machine.persistMachineSnapshot();
+    // TODO: persist all the machine snapshots
+    return this.#machines['trigger']?.persistMachineSnapshot();
   }
 
   async getState(): Promise<WorkflowRunState | null> {
-    if (!this.#machine) {
+    // TODO: get and patch together state of all machines
+    if (!this.#machines['trigger']) {
       return null;
     }
 
-    const snapshot = this.#machine.getSnapshot();
+    const snapshot = this.#machines['trigger'].getSnapshot();
     if (!snapshot) {
       return null;
     }
