@@ -25,6 +25,16 @@ import { IndexConfig } from './types';
 
 import { PgVector } from '.';
 
+const warmupCache = new Map<string, boolean>();
+async function smartWarmup(vectorDB: PgVector, testIndexName: string, dimension: number, k: number) {
+  const cacheKey = `${dimension}-${k}-${indexType}`;
+  if (!warmupCache.has(cacheKey)) {
+    console.log(`Warming up ${indexType} index for ${dimension}d vectors, k=${k}`);
+    await warmupQuery(vectorDB, testIndexName, dimension, k);
+    warmupCache.set(cacheKey, true);
+  }
+}
+
 describe('PostgreSQL Index Performance', () => {
   let vectorDB: PgVector;
   const testIndexName = 'test_index_performance';
@@ -90,7 +100,7 @@ describe('PostgreSQL Index Performance', () => {
 
             await vectorDB.createIndex(testIndexName, testConfig.dimension, 'cosine', config);
             await vectorDB.upsert(testIndexName, testVectors, vectorIds, metadata);
-            await warmupQuery(vectorDB, testIndexName, testConfig.dimension, testConfig.k);
+            await smartWarmup(vectorDB, testIndexName, testConfig.dimension, testConfig.k);
 
             // For HNSW, test different EF values
             const efValues =

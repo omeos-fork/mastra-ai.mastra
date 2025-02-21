@@ -131,31 +131,27 @@ export const calculateTimeout = (dimension: number, size: number, k: number) => 
 export const baseTestConfigs = {
   basicTests: {
     dimension: [
-      { dimension: 64, size: 10_000, k: 10, queryCount: 15 }, // Small embeddings
-      { dimension: 384, size: 10_000, k: 10, queryCount: 15 }, // Text embeddings
-      { dimension: 1024, size: 10_000, k: 10, queryCount: 15 }, // LLM embeddings
+      { dimension: 64, size: 10_000, k: 10, queryCount: 15 },
+      { dimension: 256, size: 10_000, k: 10, queryCount: 15 },
+      { dimension: 384, size: 10_000, k: 10, queryCount: 15 },
+      { dimension: 1024, size: 10_000, k: 10, queryCount: 15 },
       { dimension: 768, size: 10_000, k: 10, queryCount: 15 },
     ],
 
     size: [
-      { dimension: 384, size: 10_000, k: 10, queryCount: 15 }, // Medium
-      { dimension: 384, size: 100_000, k: 10, queryCount: 10 }, // Large
       { dimension: 384, size: 500_000, k: 10, queryCount: 10 },
-      { dimension: 384, size: 1_000_000, k: 10, queryCount: 5 }, // Very large
+      { dimension: 384, size: 1_000_000, k: 10, queryCount: 5 },
     ],
 
     k: [
       { dimension: 384, size: 100_000, k: 10, queryCount: 10 },
+      { dimension: 384, size: 100_000, k: 25, queryCount: 10 },
       { dimension: 384, size: 100_000, k: 50, queryCount: 10 },
       { dimension: 384, size: 100_000, k: 100, queryCount: 5 },
     ],
   },
 
   practicalTests: [
-    // Text search
-    { dimension: 384, size: 1_000_000, k: 10, queryCount: 5 }, // Large scale
-    { dimension: 384, size: 100_000, k: 30, queryCount: 10 },
-
     { dimension: 512, size: 100_000, k: 10, queryCount: 10 },
 
     // Multi-modal
