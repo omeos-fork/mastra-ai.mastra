@@ -130,14 +130,14 @@ describe('PostgreSQL Index Performance', () => {
                   undefined,
                   false,
                   0,
-                  ef, // This will be undefined for non-HNSW indexes
+                  { ef: ef }, // This will be undefined for non-HNSW indexes
                 );
 
                 const actualNeighbors = actualResults.map(r => r.metadata?.index);
                 const recall = calculateRecall(actualNeighbors, expectedNeighbors, testConfig.k);
                 recalls.push(recall);
                 const latency = await measureLatency(() =>
-                  vectorDB.query(testIndexName, queryVector, testConfig.k, undefined, false, 0, ef),
+                  vectorDB.query(testIndexName, queryVector, testConfig.k, undefined, false, 0, { ef }),
                 );
                 latencies.push(latency);
               }

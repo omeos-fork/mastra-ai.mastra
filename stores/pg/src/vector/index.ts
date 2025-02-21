@@ -4,10 +4,10 @@ import pg from 'pg';
 
 import { PGFilterTranslator } from './filter';
 import { buildFilterQuery } from './sql-builder';
-import { type IndexConfig } from './types';
+import { type IndexConfig, type IndexType } from './types';
 
 export interface PGIndexStats extends IndexStats {
-  type: 'flat' | 'hnsw' | 'ivfflat';
+  type: IndexType;
   config: {
     m?: number;
     efConstruction?: number;
@@ -53,7 +53,10 @@ export class PgVector extends MastraVector {
     filter?: Filter,
     includeVector: boolean = false,
     minScore: number = 0, // Optional minimum score threshold
-    ef?: number, // Optional ef parameter
+    options?: {
+      ef?: number; // For HNSW
+      probes?: number; // For IVF
+    },
   ): Promise<QueryResult[]> {
     const client = await this.pool.connect();
     try {
@@ -67,9 +70,14 @@ export class PgVector extends MastraVector {
       // Set HNSW search parameter if applicable
       if (indexInfo.type === 'hnsw') {
         // Calculate ef and clamp between 1 and 1000
-        const calculatedEf = ef ?? Math.max(topK, (indexInfo?.config?.m ?? 16) * topK);
+        const calculatedEf = options?.ef ?? Math.max(topK, (indexInfo?.config?.m ?? 16) * topK);
         const searchEf = Math.min(1000, Math.max(1, calculatedEf));
         await client.query(`SET LOCAL hnsw.ef_search = ${searchEf}`);
+      }
+
+      if (indexInfo.type === 'ivfflat') {
+        const probes = options?.probes ?? 1;
+        await client.query(`SET LOCAL ivfflat.probes = ${probes}`);
       }
 
       const query = `
@@ -215,18 +223,13 @@ export class PgVector extends MastraVector {
           )
         `;
       } else {
-        // ivfflat with probes
         const lists = indexConfig.ivf?.lists ?? 100; // Default to 100 lists
-        const probes = indexConfig.ivf?.probes ?? 1; // Default to 1 probe
 
         indexSQL = `
           CREATE INDEX ${indexName}_vector_idx
           ON ${indexName}
           USING ivfflat (embedding ${metricOp})
-          WITH (
-            lists = ${lists},
-            probes = ${probes}
-          )
+          WITH (lists = ${lists});
         `;
       }
 
@@ -314,15 +317,13 @@ export class PgVector extends MastraVector {
       const config: { m?: number; efConstruction?: number; lists?: number; probes?: number } = {};
 
       if (index_method === 'hnsw') {
-        const m = index_def.match(/m = (\d+)/)?.[1];
-        const efConstruction = index_def.match(/ef_construction = (\d+)/)?.[1];
+        const m = index_def.match(/m\s*=\s*'?(\d+)'?/)?.[1];
+        const efConstruction = index_def.match(/ef_construction\s*=\s*'?(\d+)'?/)?.[1];
         if (m) config.m = parseInt(m);
         if (efConstruction) config.efConstruction = parseInt(efConstruction);
       } else if (index_method === 'ivfflat') {
-        const lists = index_def.match(/lists = (\d+)/)?.[1];
-        const probes = index_def.match(/probes = (\d+)/)?.[1];
+        const lists = index_def.match(/lists\s*=\s*'?(\d+)'?/)?.[1];
         if (lists) config.lists = parseInt(lists);
-        if (probes) config.probes = parseInt(probes);
       }
 
       return {

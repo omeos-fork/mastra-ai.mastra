@@ -76,12 +76,6 @@ It provides robust vector similarity search capabilities within your existing Po
               description: "Number of lists (default: 100)",
               isOptional: true,
             },
-            {
-              name: "probes",
-              type: "number",
-              description: "Number of probes (default: 1)",
-              isOptional: true,
-            },
           ],
         },
       ],
@@ -183,6 +177,31 @@ It provides robust vector similarity search capabilities within your existing Po
       isOptional: true,
       defaultValue: "0",
       description: "Minimum similarity score threshold",
+    },
+    {
+      name: "options",
+      type: "{ ef?: number; probes?: number }",
+      isOptional: true,
+      description: "Additional options for HNSW and IVF indexes",
+      properties: [
+        {
+          type: "object",
+          parameters: [
+            {
+              name: "ef",
+              type: "number",
+              description: "HNSW search parameter",
+              isOptional: true,
+            },
+            {
+              name: "probes",
+              type: "number",
+              description: "IVF search parameter",
+              isOptional: true,
+            },
+          ],
+        },
+      ],
     },
   ]}
 />

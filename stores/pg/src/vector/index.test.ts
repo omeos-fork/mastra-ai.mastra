@@ -42,6 +42,32 @@ describe('PgVector', () => {
       it('should throw error if dimension is invalid', async () => {
         await expect(vectorDB.createIndex(`testIndexNameFail`, 0)).rejects.toThrow();
       });
+
+      it('should create index with flat type', async () => {
+        await vectorDB.createIndex(testIndexName2, 3, 'cosine', { type: 'flat' });
+        const stats = await vectorDB.describeIndex(testIndexName2);
+        expect(stats.type).toBe('flat');
+      });
+
+      it('should create index with hnsw type', async () => {
+        await vectorDB.createIndex(testIndexName2, 3, 'cosine', {
+          type: 'hnsw',
+          hnsw: { m: 16, efConstruction: 64 }, // Any reasonable values work
+        });
+        const stats = await vectorDB.describeIndex(testIndexName2);
+        expect(stats.type).toBe('hnsw');
+        expect(stats.config.m).toBe(16);
+      });
+
+      it('should create index with ivfflat type and lists', async () => {
+        await vectorDB.createIndex(testIndexName2, 3, 'cosine', {
+          type: 'ivfflat',
+          ivf: { lists: 100 },
+        });
+        const stats = await vectorDB.describeIndex(testIndexName2);
+        expect(stats.type).toBe('ivfflat');
+        expect(stats.config.lists).toBe(100);
+      });
     });
 
     describe('listIndexes', () => {
@@ -86,6 +112,10 @@ describe('PgVector', () => {
 
         const stats = await vectorDB.describeIndex(indexName);
         expect(stats).toEqual({
+          type: 'ivfflat',
+          config: {
+            lists: 100,
+          },
           dimension: 3,
           count: 2,
           metric: 'cosine',
@@ -152,59 +182,61 @@ describe('PgVector', () => {
     });
 
     describe('Basic Query Operations', () => {
-      const indexName = 'test_query_2';
-      beforeAll(async () => {
-        try {
+      ['flat', 'hnsw', 'ivfflat'].forEach(indexType => {
+        const indexName = `test_query_2_${indexType}`;
+        beforeAll(async () => {
+          try {
+            await vectorDB.deleteIndex(indexName);
+          } catch (e) {
+            // Ignore if doesn't exist
+          }
+          await vectorDB.createIndex(indexName, 3);
+        });
+
+        beforeEach(async () => {
+          await vectorDB.truncateIndex(indexName);
+          const vectors = [
+            [1, 0, 0],
+            [0.8, 0.2, 0],
+            [0, 1, 0],
+          ];
+          const metadata = [
+            { type: 'a', value: 1 },
+            { type: 'b', value: 2 },
+            { type: 'a', value: 3 },
+          ];
+          await vectorDB.upsert(indexName, vectors, metadata);
+        });
+
+        afterAll(async () => {
           await vectorDB.deleteIndex(indexName);
-        } catch (e) {
-          // Ignore if doesn't exist
-        }
-        await vectorDB.createIndex(indexName, 3);
-      });
+        });
 
-      beforeEach(async () => {
-        await vectorDB.truncateIndex(indexName);
-        const vectors = [
-          [1, 0, 0],
-          [0.8, 0.2, 0],
-          [0, 1, 0],
-        ];
-        const metadata = [
-          { type: 'a', value: 1 },
-          { type: 'b', value: 2 },
-          { type: 'a', value: 3 },
-        ];
-        await vectorDB.upsert(indexName, vectors, metadata);
-      });
+        it('should return closest vectors', async () => {
+          const results = await vectorDB.query(indexName, [1, 0, 0], 1);
+          expect(results).toHaveLength(1);
+          expect(results[0]?.vector).toBe(undefined);
+          expect(results[0]?.score).toBeCloseTo(1, 5);
+        });
 
-      afterAll(async () => {
-        await vectorDB.deleteIndex(indexName);
-      });
+        it('should return vector with result', async () => {
+          const results = await vectorDB.query(indexName, [1, 0, 0], 1, undefined, true);
+          expect(results).toHaveLength(1);
+          expect(results[0]?.vector).toStrictEqual([1, 0, 0]);
+        });
 
-      it('should return closest vectors', async () => {
-        const results = await vectorDB.query(indexName, [1, 0, 0], 1);
-        expect(results).toHaveLength(1);
-        expect(results[0]?.vector).toBe(undefined);
-        expect(results[0]?.score).toBeCloseTo(1, 5);
-      });
+        it('should respect topK parameter', async () => {
+          const results = await vectorDB.query(indexName, [1, 0, 0], 2);
+          expect(results).toHaveLength(2);
+        });
 
-      it('should return vector with result', async () => {
-        const results = await vectorDB.query(indexName, [1, 0, 0], 1, undefined, true);
-        expect(results).toHaveLength(1);
-        expect(results[0]?.vector).toStrictEqual([1, 0, 0]);
-      });
+        it('should handle filters correctly', async () => {
+          const results = await vectorDB.query(indexName, [1, 0, 0], 10, { type: 'a' });
 
-      it('should respect topK parameter', async () => {
-        const results = await vectorDB.query(indexName, [1, 0, 0], 2);
-        expect(results).toHaveLength(2);
-      });
-
-      it('should handle filters correctly', async () => {
-        const results = await vectorDB.query(indexName, [1, 0, 0], 10, { type: 'a' });
-
-        expect(results).toHaveLength(1);
-        results.forEach(result => {
-          expect(result?.metadata?.type).toBe('a');
+          expect(results).toHaveLength(1);
+          results.forEach(result => {
+            expect(result?.metadata?.type).toBe('a');
+          });
         });
       });
     });
