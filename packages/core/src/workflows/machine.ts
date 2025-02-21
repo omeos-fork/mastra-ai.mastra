@@ -101,6 +101,10 @@ export class Machine<
     this.initializeMachine();
   }
 
+  get startStepId() {
+    return this.#startStepId;
+  }
+
   async execute({
     input,
     snapshot,

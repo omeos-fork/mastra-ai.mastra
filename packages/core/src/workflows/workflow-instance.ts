@@ -69,7 +69,7 @@ export class WorkflowInstance<TSteps extends Step<any, any, any>[] = any, TTrigg
   #onFinish?: () => void;
 
   // indexed by stepId
-  #suspendedMachines: Record<string, Machine> = {};
+  #suspendedMachines: Record<string, Machine<TSteps, TTriggerSchema>> = {};
 
   constructor({
     name,
@@ -231,6 +231,15 @@ export class WorkflowInstance<TSteps extends Step<any, any, any>[] = any, TTrigg
     }
 
     snapshot.childStates = machineSnapshots;
+
+    const suspendedSteps: Record<string, string> = Object.entries(this.#suspendedMachines).reduce(
+      (acc, [stepId, machine]) => {
+        acc[stepId] = machine.startStepId;
+        return acc;
+      },
+      {} as Record<string, string>,
+    );
+    snapshot.suspendedSteps = suspendedSteps;
 
     await this.#mastra?.storage?.persistWorkflowSnapshot({
       workflowName: this.name,

@@ -343,4 +343,5 @@ export interface WorkflowRunState {
   timestamp: number;
 
   childStates?: Record<string, WorkflowRunState>;
+  suspendedSteps?: Record<string, string>;
 }
