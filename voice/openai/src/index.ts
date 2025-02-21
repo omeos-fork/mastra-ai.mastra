@@ -3,11 +3,64 @@ import OpenAI from 'openai';
 import { PassThrough } from 'stream';
 
 type OpenAIVoiceId = 'alloy' | 'echo' | 'fable' | 'onyx' | 'nova' | 'shimmer' | 'ash' | 'coral' | 'sage';
-// file types mp3, mp4, mpeg, mpga, m4a, wav, and webm.
+type OpenAIModel = 'tts-1' | 'tts-1-hd' | 'whisper-1';
+type OpenAIFileType = 'mp3' | 'mp4' | 'mpeg' | 'mpga' | 'm4a' | 'wav' | 'webm';
 
-interface OpenAIConfig {
-  name?: 'tts-1' | 'tts-1-hd' | 'whisper-1';
+export interface OpenAIConfig {
+  name?: OpenAIModel;
   apiKey?: string;
+}
+
+export interface OpenAIVoiceConfig {
+  speech?: {
+    model: 'tts-1' | 'tts-1-hd';
+    apiKey?: string;
+    speaker?: OpenAIVoiceId;
+  };
+  listening?: {
+    model: 'whisper-1';
+    apiKey?: string;
+    language?: string;
+  };
+}
+
+export interface OpenAIVoiceCapabilities {
+  speak?: (
+    input: string | NodeJS.ReadableStream,
+    options?: { speaker?: string; speed?: number },
+  ) => Promise<NodeJS.ReadableStream>;
+  listen?: (
+    audioStream: NodeJS.ReadableStream,
+    options: { filetype: OpenAIFileType; [key: string]: any },
+  ) => Promise<string>;
+  getSpeakers?: () => Promise<Array<{ voiceId: OpenAIVoiceId }>>;
+}
+
+/**
+ * Creates OpenAI voice capabilities
+ */
+export function createOpenAIVoice(config?: OpenAIVoiceConfig): OpenAIVoiceCapabilities {
+  const provider = new OpenAIVoice({
+    speechModel: config?.speech
+      ? {
+          name: config.speech.model,
+          apiKey: config.speech.apiKey,
+        }
+      : undefined,
+    listeningModel: config?.listening
+      ? {
+          name: config.listening.model,
+          apiKey: config.listening.apiKey,
+        }
+      : undefined,
+    speaker: config?.speech?.speaker,
+  });
+
+  return {
+    speak: config?.speech ? provider.speak.bind(provider) : undefined,
+    listen: config?.listening ? provider.listen.bind(provider) : undefined,
+    getSpeakers: config?.speech ? provider.getSpeakers.bind(provider) : undefined,
+  };
 }
 
 export class OpenAIVoice extends MastraVoice {
@@ -58,18 +111,22 @@ export class OpenAIVoice extends MastraVoice {
     }
   }
 
-  async getSpeakers() {
-    return this.traced(
-      async () => [
-        { voiceId: 'alloy' },
-        { voiceId: 'echo' },
-        { voiceId: 'fable' },
-        { voiceId: 'onyx' },
-        { voiceId: 'nova' },
-        { voiceId: 'shimmer' },
-      ],
-      'voice.openai.getSpeakers',
-    )();
+  async getSpeakers(): Promise<Array<{ voiceId: OpenAIVoiceId }>> {
+    if (!this.speechModel) {
+      throw new Error('Speech model not configured');
+    }
+
+    return [
+      { voiceId: 'alloy' },
+      { voiceId: 'echo' },
+      { voiceId: 'fable' },
+      { voiceId: 'onyx' },
+      { voiceId: 'nova' },
+      { voiceId: 'shimmer' },
+      { voiceId: 'ash' },
+      { voiceId: 'coral' },
+      { voiceId: 'sage' },
+    ];
   }
 
   async speak(
@@ -90,6 +147,10 @@ export class OpenAIVoice extends MastraVoice {
         chunks.push(Buffer.from(chunk));
       }
       input = Buffer.concat(chunks).toString('utf-8');
+    }
+
+    if (input.trim().length === 0) {
+      throw new Error('Input text is empty');
     }
 
     const audio = await this.traced(async () => {

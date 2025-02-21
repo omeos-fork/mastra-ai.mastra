@@ -18,13 +18,59 @@ OPENAI_API_KEY=your_api_key
 
 ## Usage
 
+### Using the Factory Function (Recommended)
+
+```typescript
+import { createOpenAIVoice } from '@mastra/voice-openai';
+
+// Create voice with both speech and listening capabilities
+const voice = createOpenAIVoice({
+  speech: {
+    model: 'tts-1', // or 'tts-1-hd' for higher quality
+    apiKey: 'your-api-key', // Optional, can use OPENAI_API_KEY env var
+    speaker: 'alloy', // Default voice
+  },
+  listening: {
+    model: 'whisper-1',
+    apiKey: 'your-api-key', // Optional, can use OPENAI_API_KEY env var
+  },
+});
+
+// Or create speech-only voice
+const speechVoice = createOpenAIVoice({
+  speech: {
+    model: 'tts-1',
+    speaker: 'nova',
+  },
+});
+
+// Or create listening-only voice
+const listeningVoice = createOpenAIVoice({
+  listening: {
+    model: 'whisper-1',
+  },
+});
+
+// List available voices
+const speakers = await voice.getSpeakers();
+
+// Generate speech
+const audioStream = await voice.speak('Hello from Mastra!');
+
+// Convert speech to text
+const text = await voice.listen(audioStream, {
+  filetype: 'wav',
+});
+```
+
+### Using the Class Directly
+
 ```typescript
 import { OpenAIVoice } from '@mastra/voice-openai';
 
-// Initialize with configuration
 const voice = new OpenAIVoice({
   speechModel: {
-    name: 'tts-1', // or 'tts-1-hd' for higher quality
+    name: 'tts-1',
     apiKey: 'your-api-key', // Optional, can use OPENAI_API_KEY env var
   },
   listeningModel: {
@@ -32,20 +78,6 @@ const voice = new OpenAIVoice({
     apiKey: 'your-api-key', // Optional, can use OPENAI_API_KEY env var
   },
   speaker: 'alloy', // Default voice
-});
-
-// List available voices
-const speakers = await voice.getSpeakers();
-
-// Generate speech
-const audioStream = await voice.speak('Hello from Mastra!', {
-  speaker: 'alloy',
-  speed: 1.0,
-});
-
-// Convert speech to text
-const text = await voice.listen(audioStream, {
-  filetype: 'wav',
 });
 ```
 
