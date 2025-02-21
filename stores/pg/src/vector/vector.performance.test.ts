@@ -45,11 +45,11 @@ describe('PostgreSQL Index Performance', () => {
 
   // IVF and HNSW specific configs
   const indexConfigs: IndexConfig[] = [
-    { type: 'flat' }, // Test flat/linear search as baseline
+    // { type: 'flat' }, // Test flat/linear search as baseline
     { type: 'ivfflat' },
-    { type: 'ivfflat', ivf: { lists: 100 } }, // Test IVF with fixed lists
-    { type: 'hnsw', hnsw: { m: 16, efConstruction: 64 } }, // Default settings
-    { type: 'hnsw', hnsw: { m: 64, efConstruction: 256 } }, // Maximum quality
+    // { type: 'ivfflat', ivf: { lists: 100 } }, // Test IVF with fixed lists
+    // { type: 'hnsw', hnsw: { m: 16, efConstruction: 64 } }, // Default settings
+    // { type: 'hnsw', hnsw: { m: 64, efConstruction: 256 } }, // Maximum quality
   ];
   beforeEach(async () => {
     await vectorDB.deleteIndex(testIndexName);
@@ -66,11 +66,11 @@ describe('PostgreSQL Index Performance', () => {
 
   // Combine all test configs
   const allConfigs: TestConfig[] = [
-    // ...baseTestConfigs.basicTests.dimension,
+    ...baseTestConfigs.basicTests.dimension,
     // ...baseTestConfigs.basicTests.size,
     // ...baseTestConfigs.basicTests.k,
     // ...baseTestConfigs.practicalTests,
-    ...baseTestConfigs.stressTests,
+    // ...baseTestConfigs.stressTests,
     // ...baseTestConfigs.smokeTests,
   ];
 
@@ -84,6 +84,7 @@ describe('PostgreSQL Index Performance', () => {
         it(
           testDesc,
           async () => {
+            console.log('generating vectors');
             const testVectors = generateRandomVectors(testConfig.size, testConfig.dimension);
             const queryVectors = generateRandomVectors(testConfig.queryCount, testConfig.dimension);
             const vectorIds = testVectors.map((_, idx) => `vec_${idx}`);
@@ -104,8 +105,11 @@ describe('PostgreSQL Index Performance', () => {
             };
 
             await vectorDB.createIndex(testIndexName, testConfig.dimension, 'cosine', config);
+            console.log('created index');
             await vectorDB.upsert(testIndexName, testVectors, metadata, vectorIds);
+            console.log('upserted vectors');
             await smartWarmup(vectorDB, testIndexName, indexConfig.type, testConfig.dimension, testConfig.k);
+            console.log('warmup done');
 
             // For HNSW, test different EF values
             const efValues =

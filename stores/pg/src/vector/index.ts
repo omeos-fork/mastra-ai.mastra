@@ -36,66 +36,6 @@ export class PgVector extends MastraVector {
     return translatedFilter;
   }
 
-  private async getIndexInfo(indexName: string): Promise<{
-    type: 'flat' | 'hnsw' | 'ivfflat';
-    metric: 'cosine' | 'euclidean' | 'dotproduct';
-    config: {
-      m?: number;
-      efConstruction?: number;
-      lists?: number;
-    };
-  }> {
-    const client = await this.pool.connect();
-    try {
-      const indexQuery = `
-        SELECT a.amname as index_type,
-               pg_get_indexdef(i.indexrelid) as index_def,
-               opclass.opcname as operator_class
-        FROM pg_index i
-        JOIN pg_class c ON i.indexrelid = c.oid
-        JOIN pg_am a ON c.relam = a.oid
-        JOIN pg_opclass opclass ON i.indclass[0] = opclass.oid
-        WHERE c.relname = '${indexName}_vector_idx';
-      `;
-
-      const result = await client.query(indexQuery);
-      if (result.rows.length === 0) {
-        return { type: 'flat', metric: 'cosine', config: {} };
-      }
-
-      const { index_type, index_def, operator_class } = result.rows[0];
-
-      // Parse metric type
-      const metric = operator_class.includes('cosine')
-        ? 'cosine'
-        : operator_class.includes('l2')
-          ? 'euclidean'
-          : 'dotproduct';
-
-      // Parse index configuration
-      const config: { m?: number; efConstruction?: number; lists?: number } = {};
-
-      if (index_type === 'hnsw') {
-        const m = index_def.match(/m = (\d+)/)?.[1];
-        const efConstruction = index_def.match(/ef_construction = (\d+)/)?.[1];
-
-        if (m) config.m = parseInt(m);
-        if (efConstruction) config.efConstruction = parseInt(efConstruction);
-      } else if (index_type === 'ivfflat') {
-        const lists = index_def.match(/lists = (\d+)/)?.[1];
-        if (lists) config.lists = parseInt(lists);
-      }
-
-      return {
-        type: index_type as 'flat' | 'hnsw' | 'ivfflat',
-        metric,
-        config,
-      };
-    } finally {
-      client.release();
-    }
-  }
-
   async query(
     indexName: string,
     queryVector: number[],
@@ -112,12 +52,12 @@ export class PgVector extends MastraVector {
       const { sql: filterQuery, values: filterValues } = buildFilterQuery(translatedFilter, minScore);
 
       // Get index type and configuration
-      const indexInfo = await this.getIndexInfo(indexName);
+      const indexInfo = await this.describeIndex(indexName);
 
       // Set HNSW search parameter if applicable
       if (indexInfo.type === 'hnsw') {
         // Calculate ef and clamp between 1 and 1000
-        const calculatedEf = ef ?? Math.max(topK, (indexInfo.config.m ?? 16) * topK);
+        const calculatedEf = ef ?? Math.max(topK, (indexInfo?.config?.m ?? 16) * topK);
         const searchEf = Math.min(1000, Math.max(1, calculatedEf));
         await client.query(`SET LOCAL hnsw.ef_search = ${searchEf}`);
       }
@@ -160,10 +100,6 @@ export class PgVector extends MastraVector {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
-
-      // Get initial count
-      const initialCount = parseInt((await client.query(`SELECT COUNT(*) FROM ${indexName}`)).rows[0].count);
-
       const vectorIds = ids || vectors.map(() => crypto.randomUUID());
 
       for (let i = 0; i < vectors.length; i++) {
@@ -181,16 +117,6 @@ export class PgVector extends MastraVector {
       }
 
       await client.query('COMMIT');
-
-      // // Check if reoptimization is needed
-      const finalCount = parseInt((await client.query(`SELECT COUNT(*) FROM ${indexName}`)).rows[0].count);
-      const growthRatio = finalCount / initialCount;
-
-      // Reoptimize if size changed significantly (e.g., grew by 50% or more)
-      if (growthRatio > 1.5 || growthRatio < 0.5) {
-        await this.reoptimizeIndex(indexName);
-      }
-
       return vectorIds;
     } catch (error) {
       await client.query('ROLLBACK');
@@ -259,15 +185,11 @@ export class PgVector extends MastraVector {
     try {
       await client.query(`DROP INDEX IF EXISTS ${indexName}_vector_idx`);
 
-      // If type is 'flat', don't create a new index
-      if (indexConfig.type === 'flat') {
-        return;
-      }
+      if (indexConfig.type === 'flat') return;
 
       const metricOp =
         metric === 'cosine' ? 'vector_cosine_ops' : metric === 'euclidean' ? 'vector_l2_ops' : 'vector_ip_ops';
 
-      // Build and execute index creation SQL
       let indexSQL: string;
       if (indexConfig.type === 'hnsw') {
         const m = indexConfig.hnsw?.m ?? 16;
@@ -283,27 +205,18 @@ export class PgVector extends MastraVector {
           )
         `;
       } else {
-        // ivfflat
-        // Get row count for dynamic list calculation
-        const countResult = await client.query(`SELECT COUNT(*) FROM ${indexName}`);
-        const rowCount = parseInt(countResult.rows[0].count);
-
-        // Calculate optimal lists if not provided
-        const lists =
-          indexConfig.ivf?.lists ??
-          Math.max(
-            10, // Minimum lists
-            Math.min(
-              1000, // Maximum lists
-              Math.floor(Math.sqrt(rowCount)),
-            ),
-          );
+        // ivfflat with probes
+        const lists = indexConfig.ivf?.lists ?? 100; // Default to 100 lists
+        const probes = indexConfig.ivf?.probes ?? 1; // Default to 1 probe
 
         indexSQL = `
           CREATE INDEX ${indexName}_vector_idx
           ON ${indexName}
           USING ivfflat (embedding ${metricOp})
-          WITH (lists = ${lists})
+          WITH (
+            lists = ${lists},
+            probes = ${probes}
+          )
         `;
       }
 
@@ -314,10 +227,10 @@ export class PgVector extends MastraVector {
   }
 
   async reoptimizeIndex(indexName: string): Promise<void> {
-    const indexInfo = await this.getIndexInfo(indexName);
+    const indexInfo = await this.describeIndex(indexName);
     await this.configureIndex(indexName, indexInfo.metric, {
-      type: indexInfo.type,
-      ...(indexInfo.type === 'hnsw' ? { hnsw: indexInfo.config } : { ivf: { lists: indexInfo.config.lists } }),
+      type: indexInfo.type as 'ivfflat' | 'hnsw' | 'flat',
+      ...(indexInfo.type === 'hnsw' ? { hnsw: indexInfo.config } : { ivf: { lists: indexInfo.config?.lists } }),
     });
   }
 
@@ -356,9 +269,10 @@ export class PgVector extends MastraVector {
             `;
 
       // Get index metric type
-      const metricQuery = `
+      const indexQuery = `
             SELECT
                 am.amname as index_method,
+                pg_get_indexdef(i.indexrelid) as index_def,
                 opclass.opcname as operator_class
             FROM pg_index i
             JOIN pg_class c ON i.indexrelid = c.oid
@@ -367,29 +281,46 @@ export class PgVector extends MastraVector {
             WHERE c.relname = '${indexName}_vector_idx';
             `;
 
-      const [dimResult, countResult, metricResult] = await Promise.all([
+      const [dimResult, countResult, indexResult] = await Promise.all([
         client.query(dimensionQuery, [indexName]),
         client.query(countQuery),
-        client.query(metricQuery),
+        client.query(indexQuery),
       ]);
 
+      const { index_method, index_def, operator_class } = indexResult.rows[0] || {
+        index_method: 'flat',
+        index_def: '',
+        operator_class: 'cosine',
+      };
+
       // Convert pg_vector index method to our metric type
-      let metric: 'cosine' | 'euclidean' | 'dotproduct' = 'cosine';
-      if (metricResult.rows.length > 0) {
-        const operatorClass = metricResult.rows[0].operator_class;
-        if (operatorClass.includes('l2')) {
-          metric = 'euclidean';
-        } else if (operatorClass.includes('ip')) {
-          metric = 'dotproduct';
-        } else if (operatorClass.includes('cosine')) {
-          metric = 'cosine';
-        }
+      const metric = operator_class.includes('l2')
+        ? 'euclidean'
+        : operator_class.includes('ip')
+          ? 'dotproduct'
+          : 'cosine';
+
+      // Parse index configuration
+      const config: { m?: number; efConstruction?: number; lists?: number; probes?: number } = {};
+
+      if (index_method === 'hnsw') {
+        const m = index_def.match(/m = (\d+)/)?.[1];
+        const efConstruction = index_def.match(/ef_construction = (\d+)/)?.[1];
+        if (m) config.m = parseInt(m);
+        if (efConstruction) config.efConstruction = parseInt(efConstruction);
+      } else if (index_method === 'ivfflat') {
+        const lists = index_def.match(/lists = (\d+)/)?.[1];
+        const probes = index_def.match(/probes = (\d+)/)?.[1];
+        if (lists) config.lists = parseInt(lists);
+        if (probes) config.probes = parseInt(probes);
       }
 
       return {
         dimension: dimResult.rows[0].dimension,
         count: parseInt(countResult.rows[0].count),
         metric,
+        type: index_method as 'flat' | 'hnsw' | 'ivfflat',
+        config,
       };
     } catch (e: any) {
       await client.query('ROLLBACK');
