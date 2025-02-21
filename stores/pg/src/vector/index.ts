@@ -233,7 +233,7 @@ export class PgVector extends MastraVector {
         let lists = indexConfig.ivf?.lists ?? 100;
         if (indexConfig.ivf?.dynamic) {
           const size = (await client.query(`SELECT COUNT(*) FROM ${indexName}`)).rows[0].count;
-          lists = Math.floor(Math.sqrt(size));
+          lists = Math.max(100, Math.min(4000, Math.floor(Math.sqrt(size) * 2)));
         }
 
         indexSQL = `

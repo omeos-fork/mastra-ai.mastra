@@ -59,7 +59,7 @@ const connectionString =
   process.env.DB_URL ||
   `postgresql://postgres:postgres@localhost:5434/mastra?options=-c%20${encodeURIComponent(pgOptions)}`;
 describe('PostgreSQL Index Performance', () => {
-  let vectorDB: PgVector = new PgVector(connectionString);
+  let vectorDB: PgVector;
   const testIndexName = 'test_index_performance';
   const results: TestResult[] = [];
 
@@ -72,6 +72,10 @@ describe('PostgreSQL Index Performance', () => {
     { type: 'hnsw', hnsw: { m: 16, efConstruction: 64 } }, // Default settings
     { type: 'hnsw', hnsw: { m: 64, efConstruction: 256 } }, // Maximum quality
   ];
+  beforeAll(async () => {
+    // Initialize PgVector
+    vectorDB = new PgVector(connectionString);
+  });
   beforeEach(async () => {
     await vectorDB.deleteIndex(testIndexName);
   });
@@ -87,8 +91,8 @@ describe('PostgreSQL Index Performance', () => {
 
   // Combine all test configs
   const allConfigs: TestConfig[] = [
-    // ...baseTestConfigs.basicTests.dimension,
-    ...baseTestConfigs.basicTests.size,
+    ...baseTestConfigs.basicTests.dimension,
+    // ...baseTestConfigs.basicTests.size,
     // ...baseTestConfigs.basicTests.k,
     // ...baseTestConfigs.practicalTests,
     // ...baseTestConfigs.stressTests,
