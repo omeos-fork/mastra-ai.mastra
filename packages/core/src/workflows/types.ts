@@ -341,4 +341,6 @@ export interface WorkflowRunState {
   // Metadata
   runId: string;
   timestamp: number;
+
+  childStates?: WorkflowRunState[];
 }
