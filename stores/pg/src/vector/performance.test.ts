@@ -33,11 +33,9 @@ describe('PostgreSQL Index Performance', () => {
   // IVF and HNSW specific configs
   const indexConfigs = [
     { type: 'flat' }, // Test flat/linear search as baseline
-    { type: 'ivfflat' }, // Test IVF with dynamic lists (sqrt(N))
     { type: 'ivfflat', ivf: { lists: 100 } }, // Test IVF with fixed lists
-    { type: 'ivfflat', ivf: { lists: (size: number) => Math.floor(size / 10) } }, // Size-proportional lists
+    { type: 'ivfflat', ivf: { lists: (size: number) => Math.sqrt(size) } },
     { type: 'hnsw', m: 16, efConstruction: 64 }, // Default settings
-    { type: 'hnsw', m: 32, efConstruction: 128 }, // Higher quality
     { type: 'hnsw', m: 64, efConstruction: 256 }, // Maximum quality
   ];
 
@@ -61,6 +59,7 @@ describe('PostgreSQL Index Performance', () => {
     ...baseTestConfigs.basicTests.k,
     ...baseTestConfigs.practicalTests,
     ...baseTestConfigs.stressTests,
+    ...baseTestConfigs.smokeTests,
   ];
 
   // For each index config

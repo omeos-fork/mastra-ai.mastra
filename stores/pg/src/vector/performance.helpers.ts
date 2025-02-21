@@ -131,56 +131,45 @@ export const calculateTimeout = (dimension: number, size: number, k: number) => 
 export const baseTestConfigs = {
   basicTests: {
     dimension: [
-      { dimension: 64, size: 10_000, k: 10, queryCount: 20 }, // Small embeddings
-      { dimension: 384, size: 10_000, k: 10, queryCount: 20 }, // Text embeddings
-      { dimension: 768, size: 10_000, k: 10, queryCount: 20 }, // LLM embeddings
+      { dimension: 64, size: 10_000, k: 10, queryCount: 15 }, // Small embeddings
+      { dimension: 384, size: 10_000, k: 10, queryCount: 15 }, // Text embeddings
+      { dimension: 1024, size: 10_000, k: 10, queryCount: 15 }, // LLM embeddings
+      { dimension: 768, size: 10_000, k: 10, queryCount: 15 },
     ],
 
     size: [
-      { dimension: 384, size: 1_000, k: 10, queryCount: 20 }, // Small
-      { dimension: 384, size: 10_000, k: 10, queryCount: 20 }, // Medium
-      { dimension: 384, size: 100_000, k: 10, queryCount: 15 }, // Large
-      { dimension: 384, size: 1_000_000, k: 10, queryCount: 10 }, // Very large
+      { dimension: 384, size: 10_000, k: 10, queryCount: 15 }, // Medium
+      { dimension: 384, size: 100_000, k: 10, queryCount: 10 }, // Large
+      { dimension: 384, size: 500_000, k: 10, queryCount: 10 },
+      { dimension: 384, size: 1_000_000, k: 10, queryCount: 5 }, // Very large
     ],
 
     k: [
-      { dimension: 384, size: 100_000, k: 10, queryCount: 20 },
-      { dimension: 384, size: 100_000, k: 50, queryCount: 15 },
-      { dimension: 384, size: 100_000, k: 100, queryCount: 10 },
+      { dimension: 384, size: 100_000, k: 10, queryCount: 10 },
+      { dimension: 384, size: 100_000, k: 50, queryCount: 10 },
+      { dimension: 384, size: 100_000, k: 100, queryCount: 5 },
     ],
   },
 
   practicalTests: [
     // Text search
-    { dimension: 384, size: 100_000, k: 10, queryCount: 20 }, // Medium scale
-    { dimension: 384, size: 1_000_000, k: 10, queryCount: 10 }, // Large scale
+    { dimension: 384, size: 1_000_000, k: 10, queryCount: 5 }, // Large scale
+    { dimension: 384, size: 100_000, k: 30, queryCount: 10 },
 
-    // Image search
-    { dimension: 512, size: 100_000, k: 20, queryCount: 20 }, // Medium scale
-    { dimension: 512, size: 1_000_000, k: 20, queryCount: 10 }, // Large scale
+    { dimension: 512, size: 100_000, k: 10, queryCount: 10 },
 
     // Multi-modal
-    { dimension: 1024, size: 50_000, k: 10, queryCount: 15 }, // Combined embeddings
-
-    // Batch search scenarios
-    { dimension: 384, size: 100_000, k: 100, queryCount: 10 }, // Large batch retrieval
-
-    // Dense clusters
-    { dimension: 128, size: 100_000, k: 50, queryCount: 15 }, // Similar items
+    { dimension: 1024, size: 100_000, k: 20, queryCount: 10 },
   ],
 
   stressTests: [
-    // High dimension
-    { dimension: 768, size: 100_000, k: 10, queryCount: 10 },
-
-    // Large result set
-    { dimension: 384, size: 100_000, k: 100, queryCount: 10 },
-
     // Maximum load
     { dimension: 512, size: 1_000_000, k: 50, queryCount: 5 },
 
     // Dense search
     { dimension: 256, size: 1_000_000, k: 100, queryCount: 5 },
+
+    { dimension: 1024, size: 500_000, k: 50, queryCount: 5 },
   ],
 
   smokeTests: [{ dimension: 384, size: 1_000, k: 10, queryCount: 5 }],
