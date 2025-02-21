@@ -4,7 +4,7 @@ import pg from 'pg';
 
 import { PGFilterTranslator } from './filter';
 import { buildFilterQuery } from './sql-builder';
-import { IndexConfig, IndexType } from './types';
+import { type IndexConfig } from './types';
 
 export class PgVector extends MastraVector {
   private pool: pg.Pool;
@@ -162,7 +162,7 @@ export class PgVector extends MastraVector {
       await client.query('BEGIN');
 
       // Get initial count
-      const initialCount = parseInt((await client.query(`SELECT COUNT(*) FROM ${indexName}`)).rows[0].count);
+      // const initialCount = parseInt((await client.query(`SELECT COUNT(*) FROM ${indexName}`)).rows[0].count);
 
       const vectorIds = ids || vectors.map(() => crypto.randomUUID());
 
@@ -182,14 +182,14 @@ export class PgVector extends MastraVector {
 
       await client.query('COMMIT');
 
-      // Check if reoptimization is needed
-      const finalCount = parseInt((await client.query(`SELECT COUNT(*) FROM ${indexName}`)).rows[0].count);
-      const growthRatio = finalCount / initialCount;
+      // // Check if reoptimization is needed
+      // const finalCount = parseInt((await client.query(`SELECT COUNT(*) FROM ${indexName}`)).rows[0].count);
+      // const growthRatio = finalCount / initialCount;
 
-      // Reoptimize if size changed significantly (e.g., grew by 50% or more)
-      if (growthRatio > 1.5 || growthRatio < 0.5) {
-        await this.reoptimizeIndex(indexName);
-      }
+      // // Reoptimize if size changed significantly (e.g., grew by 50% or more)
+      // if (growthRatio > 1.5 || growthRatio < 0.5) {
+      //   await this.reoptimizeIndex(indexName);
+      // }
 
       return vectorIds;
     } catch (error) {
@@ -204,7 +204,7 @@ export class PgVector extends MastraVector {
     indexName: string,
     dimension: number,
     metric: 'cosine' | 'euclidean' | 'dotproduct' = 'cosine',
-    indexConfig: IndexConfig = {},
+    indexConfig: IndexConfig = { type: 'ivfflat' },
   ): Promise<void> {
     const client = await this.pool.connect();
     try {
@@ -253,7 +253,7 @@ export class PgVector extends MastraVector {
   async configureIndex(
     indexName: string,
     metric: 'cosine' | 'euclidean' | 'dotproduct' = 'cosine',
-    indexConfig: IndexConfig = {},
+    indexConfig: IndexConfig = { type: 'ivfflat' },
   ): Promise<void> {
     const client = await this.pool.connect();
     try {

@@ -11,7 +11,7 @@ interface HNSWConfig {
 }
 
 export interface IndexConfig {
-  type?: IndexType;
+  type: IndexType;
   ivf?: IVFConfig;
   hnsw?: HNSWConfig;
 }

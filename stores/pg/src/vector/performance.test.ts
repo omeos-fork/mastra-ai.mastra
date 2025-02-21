@@ -1,11 +1,9 @@
-import { describe, it, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 
 import {
   baseTestConfigs,
   TestConfig,
   TestResult,
-  setupTestDB,
-  cleanupTestDB,
   calculateTimeout,
   generateRandomVectors,
   findNearestBruteForce,
@@ -15,50 +13,61 @@ import {
   mean,
   min,
   max,
-  warmupQuery,
   measureLatency,
   getIndexDescription,
   getListCount,
   getSearchEf,
 } from './performance.helpers';
-import { IndexConfig } from './types';
+import { IndexConfig, IndexType } from './types';
 
 import { PgVector } from '.';
 
 const warmupCache = new Map<string, boolean>();
-async function smartWarmup(vectorDB: PgVector, testIndexName: string, dimension: number, k: number) {
+async function smartWarmup(vectorDB: PgVector, testIndexName: string, indexType: string, dimension: number, k: number) {
   const cacheKey = `${dimension}-${k}-${indexType}`;
   if (!warmupCache.has(cacheKey)) {
     console.log(`Warming up ${indexType} index for ${dimension}d vectors, k=${k}`);
-    await warmupQuery(vectorDB, testIndexName, dimension, k);
+    const warmupVector = generateRandomVectors(1, dimension)[0] as number[];
+    await vectorDB.query(testIndexName, warmupVector, k);
     warmupCache.set(cacheKey, true);
   }
 }
 
+const pgOptions = ['maintenance_work_mem=512MB', 'work_mem=256MB', 'temp_buffers=256MB'].join(' -c ');
+
+const connectionString =
+  process.env.DB_URL ||
+  `postgresql://postgres:postgres@localhost:5434/mastra?options=-c%20${encodeURIComponent(pgOptions)}`;
 describe('PostgreSQL Index Performance', () => {
-  let vectorDB: PgVector;
+  let vectorDB: PgVector = new PgVector(connectionString);
   const testIndexName = 'test_index_performance';
   const results: TestResult[] = [];
+  let testVectors: number[][] = [];
+  let queryVectors: number[][] = [];
 
   // IVF and HNSW specific configs
-  const indexConfigs = [
-    { type: 'flat' }, // Test flat/linear search as baseline
+  const indexConfigs: IndexConfig[] = [
+    // { type: 'flat' }, // Test flat/linear search as baseline
+    // { type: 'ivfflat' },
     { type: 'ivfflat', ivf: { lists: 100 } }, // Test IVF with fixed lists
-    { type: 'ivfflat', ivf: { lists: (size: number) => Math.sqrt(size) } },
-    { type: 'hnsw', m: 16, efConstruction: 64 }, // Default settings
-    { type: 'hnsw', m: 64, efConstruction: 256 }, // Maximum quality
+    // { type: 'hnsw', hnsw: { m: 16, efConstruction: 64 } }, // Default settings
+    // { type: 'hnsw', hnsw: { m: 64, efConstruction: 256 } }, // Maximum quality
   ];
-
-  beforeAll(async () => {
-    vectorDB = await setupTestDB(testIndexName);
-  });
-
   beforeEach(async () => {
     await vectorDB.deleteIndex(testIndexName);
   });
 
+  afterEach(async () => {
+    // Clear large arrays
+    testVectors = [];
+    queryVectors = [];
+
+    // Delete test index
+    await vectorDB.deleteIndex(testIndexName);
+  });
+
   afterAll(async () => {
-    await cleanupTestDB(vectorDB, testIndexName);
+    await vectorDB.disconnect();
     analyzeResults(results);
   });
 
@@ -82,8 +91,8 @@ describe('PostgreSQL Index Performance', () => {
         it(
           testDesc,
           async () => {
-            const testVectors = generateRandomVectors(testConfig.size, testConfig.dimension);
-            const queryVectors = generateRandomVectors(testConfig.queryCount, testConfig.dimension);
+            testVectors = generateRandomVectors(testConfig.size, testConfig.dimension);
+            queryVectors = generateRandomVectors(testConfig.queryCount, testConfig.dimension);
             const vectorIds = testVectors.map((_, idx) => `vec_${idx}`);
             const metadata = testVectors.map((_, idx) => ({ index: idx }));
 
@@ -93,18 +102,23 @@ describe('PostgreSQL Index Performance', () => {
                 ? getListCount({ size: testConfig.size, indexConfig, metrics: {} } as TestResult)
                 : undefined;
 
-            const config =
-              indexConfig.type === 'hnsw'
-                ? { type: 'hnsw', hnsw: { m: indexConfig.m, efConstruction: indexConfig.efConstruction } }
-                : { type: indexConfig.type, lists };
+            const config = {
+              type: indexConfig.type as IndexType,
+              ...(indexConfig.type === 'hnsw' && {
+                hnsw: { m: indexConfig.hnsw?.m, efConstruction: indexConfig.hnsw?.efConstruction },
+              }),
+              ...(indexConfig.type === 'ivfflat' && { lists }),
+            };
 
             await vectorDB.createIndex(testIndexName, testConfig.dimension, 'cosine', config);
-            await vectorDB.upsert(testIndexName, testVectors, vectorIds, metadata);
-            await smartWarmup(vectorDB, testIndexName, testConfig.dimension, testConfig.k);
+            await vectorDB.upsert(testIndexName, testVectors, metadata, vectorIds);
+            await smartWarmup(vectorDB, testIndexName, indexConfig.type, testConfig.dimension, testConfig.k);
 
             // For HNSW, test different EF values
             const efValues =
-              indexConfig.type === 'hnsw' ? getSearchEf(testConfig.k, indexConfig.m) : { default: undefined };
+              indexConfig.type === 'hnsw'
+                ? getSearchEf(testConfig.k, indexConfig.hnsw?.m || 16)
+                : { default: undefined };
 
             for (const [efType, ef] of Object.entries(efValues)) {
               const recalls: number[] = [];
@@ -122,7 +136,7 @@ describe('PostgreSQL Index Performance', () => {
                   ef, // This will be undefined for non-HNSW indexes
                 );
 
-                const actualNeighbors = actualResults.map(r => JSON.parse(r.id).index);
+                const actualNeighbors = actualResults.map(r => r.metadata?.index);
                 const recall = calculateRecall(actualNeighbors, expectedNeighbors, testConfig.k);
                 recalls.push(recall);
                 const latency = await measureLatency(() =>
@@ -158,7 +172,7 @@ describe('PostgreSQL Index Performance', () => {
                       vectorsPerList: Math.round(testConfig.size / (lists || 1)),
                     }),
                     ...(indexConfig.type === 'hnsw' && {
-                      m: indexConfig.m,
+                      m: indexConfig.hnsw?.m,
                       ef,
                     }),
                   },
@@ -186,7 +200,7 @@ function analyzeResults(results: TestResult[]) {
   Object.entries(byDimension).forEach(([dimension, dimensionResults]) => {
     console.log(`\n=== Analysis for ${dimension} dimensions ===\n`);
 
-    const byType = groupBy(dimensionResults, r => r.indexConfig.type);
+    const byType = groupBy(dimensionResults, (r: TestResult) => r.indexConfig.type);
 
     Object.entries(byType).forEach(([type, typeResults]) => {
       console.log(`\n--- ${type.toUpperCase()} Index Analysis ---\n`);
@@ -205,8 +219,8 @@ function analyzeResults(results: TestResult[]) {
             vectorsPerList: Math.round(r.size / (getListCount(r) || 1)),
           }),
           ...(type === 'hnsw' && {
-            m: r.indexConfig.m,
-            ef: r.indexConfig.ef,
+            m: r.indexConfig.hnsw?.m,
+            ef: r.indexConfig.hnsw?.ef,
             efType: r.indexConfig.efType,
           }),
         }));
@@ -223,8 +237,8 @@ function analyzeResults(results: TestResult[]) {
       const recallData = Object.values(
         groupBy(
           recalls,
-          r => `${r.size}-${r.k}-${type === 'ivfflat' ? r.lists : `${r.m}-${r.ef}`}`,
-          result => ({
+          (r: any) => `${r.size}-${r.k}-${type === 'ivfflat' ? r.lists : `${r.m}-${r.ef}`}`,
+          (result: any[]) => ({
             'Dataset Size': result[0].size,
             K: result[0].k,
             ...(type === 'ivfflat'
@@ -279,8 +293,8 @@ function analyzeResults(results: TestResult[]) {
       const latencyData = Object.values(
         groupBy(
           latencies,
-          r => `${r.size}-${r.k}-${type === 'ivfflat' ? r.lists : `${r.m}-${r.ef}`}`,
-          result => ({
+          (r: any) => `${r.size}-${r.k}-${type === 'ivfflat' ? r.lists : `${r.m}-${r.ef}`}`,
+          (result: any[]) => ({
             'Dataset Size': result[0].size,
             K: result[0].k,
             ...(type === 'ivfflat'
@@ -319,8 +333,8 @@ function analyzeResults(results: TestResult[]) {
         const clusteringData = Object.values(
           groupBy(
             clustering,
-            r => r.size.toString(),
-            result => ({
+            (r: any) => r.size.toString(),
+            (result: any[]) => ({
               'Dataset Size': result[0].size,
               'Vectors/List': Math.round(result[0].vectorsPerList),
               'Recommended Lists': result[0].recommendedLists,

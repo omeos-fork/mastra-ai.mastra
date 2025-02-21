@@ -1,4 +1,4 @@
-import { IndexConfig } from './types';
+import { type IndexConfig } from './types';
 
 import { PgVector } from '.';
 
@@ -22,6 +22,7 @@ export interface TestResult {
     clustering?: {
       numLists?: number;
       avgVectorsPerList?: number;
+      recommendedLists?: number;
     };
   };
 }
@@ -47,7 +48,7 @@ export const calculateRecall = (actual: number[], expected: number[], k: number)
   for (let i = 0; i < k; i++) {
     if (actual[i] === expected[i]) {
       score += 1;
-    } else if (expected.includes(actual[i])) {
+    } else if (expected.includes(actual[i] ?? 0)) {
       score += 0.5;
     }
   }
@@ -55,7 +56,7 @@ export const calculateRecall = (actual: number[], expected: number[], k: number)
 };
 
 export function cosineSimilarity(a: number[], b: number[]): number {
-  const dotProduct = a.reduce((sum, val, i) => sum + val * b[i], 0);
+  const dotProduct = a.reduce((sum, val, i) => sum + (val ?? 0) * (b[i] ?? 0), 0);
   const normA = Math.sqrt(a.reduce((sum, val) => sum + val * val, 0));
   const normB = Math.sqrt(b.reduce((sum, val) => sum + val * val, 0));
   return dotProduct / (normA * normB);
@@ -76,7 +77,7 @@ export const formatTable = (data: any[], columns: string[]) => {
   const headerSeparator = '├' + colWidths.map(w => '─'.repeat(w)).join('┼') + '┤';
   const bottomBorder = '└' + colWidths.map(w => '─'.repeat(w)).join('┴') + '┘';
 
-  const header = '│' + columns.map((col, i) => col.padEnd(colWidths[i])).join('│') + '│';
+  const header = '│' + columns.map((col, i) => col.padEnd(colWidths[i] ?? 0)).join('│') + '│';
   const rows = data.map(
     row =>
       '│' +
@@ -102,7 +103,7 @@ export const groupBy = <T, K extends keyof T>(
     (acc, item) => {
       const value = typeof key === 'function' ? key(item) : item[key];
       if (!acc[value as any]) acc[value as any] = [];
-      acc[value as any].push(item);
+      acc[value as any]?.push(item);
       return acc;
     },
     {} as Record<string, T[]>,
@@ -178,29 +179,8 @@ export interface TestConfig {
   queryCount: number;
 }
 
-export async function setupTestDB(indexName: string): Promise<PgVector> {
-  const connectionString = process.env.DB_URL || `postgresql://postgres:postgres@localhost:5434/mastra`;
-
-  const vectorDB = new PgVector(connectionString);
-  await vectorDB.pool.query('CREATE EXTENSION IF NOT EXISTS vector;');
-
-  // Configure memory settings for the session
-  await vectorDB.pool.query(`
-    SET maintenance_work_mem = '512MB';
-    SET work_mem = '256MB';
-    SET temp_buffers = '256MB';
-  `);
-
-  return vectorDB;
-}
-
-export async function cleanupTestDB(vectorDB: PgVector, indexName: string) {
-  await vectorDB.deleteIndex(indexName);
-  await vectorDB.pool.end();
-}
-
 export async function warmupQuery(vectorDB: PgVector, indexName: string, dimension: number, k: number) {
-  const warmupVector = generateRandomVectors(1, dimension)[0];
+  const warmupVector = generateRandomVectors(1, dimension)[0] as number[];
   await vectorDB.query(indexName, warmupVector, k);
 }
 
@@ -217,15 +197,12 @@ export const getListCount = (result: TestResult): number | undefined => {
   if (result.metrics.latency?.lists) {
     return result.metrics.latency.lists;
   }
-  if (typeof result.indexConfig.ivf?.lists === 'function') {
-    return result.indexConfig.ivf.lists(result.size);
-  }
   return result.indexConfig.ivf?.lists ?? Math.floor(Math.sqrt(result.size));
 };
 
 export function getIndexDescription(indexConfig: IndexConfig): string {
   if (indexConfig.type === 'hnsw') {
-    return `HNSW(m=${indexConfig.m},ef=${indexConfig.efConstruction})`;
+    return `HNSW(m=${indexConfig.hnsw?.m},ef=${indexConfig.hnsw?.efConstruction})`;
   }
 
   if (indexConfig.type === 'ivfflat') {
