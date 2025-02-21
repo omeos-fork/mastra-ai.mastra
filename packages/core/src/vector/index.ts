@@ -13,13 +13,6 @@ export interface IndexStats {
   dimension: number;
   count: number;
   metric?: 'cosine' | 'euclidean' | 'dotproduct';
-  type?: 'flat' | 'hnsw' | 'ivfflat';
-  config?: {
-    m?: number;
-    efConstruction?: number;
-    lists?: number;
-    probes?: number;
-  };
 }
 
 export abstract class MastraVector extends MastraBase {

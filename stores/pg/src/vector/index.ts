@@ -6,6 +6,16 @@ import { PGFilterTranslator } from './filter';
 import { buildFilterQuery } from './sql-builder';
 import { type IndexConfig } from './types';
 
+export interface PGIndexStats extends IndexStats {
+  type: 'flat' | 'hnsw' | 'ivfflat';
+  config: {
+    m?: number;
+    efConstruction?: number;
+    lists?: number;
+    probes?: number;
+  };
+}
+
 export class PgVector extends MastraVector {
   private pool: pg.Pool;
 
@@ -251,7 +261,7 @@ export class PgVector extends MastraVector {
     }
   }
 
-  async describeIndex(indexName: string): Promise<IndexStats> {
+  async describeIndex(indexName: string): Promise<PGIndexStats> {
     const client = await this.pool.connect();
     try {
       // Get vector dimension
