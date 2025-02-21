@@ -3,6 +3,7 @@ import { type IndexConfig } from './types';
 import { PgVector } from '.';
 
 export interface TestResult {
+  distribution: string;
   dimension: number;
   indexConfig: IndexConfig;
   size: number;
@@ -23,6 +24,7 @@ export interface TestResult {
       numLists?: number;
       avgVectorsPerList?: number;
       recommendedLists?: number;
+      distribution?: string;
     };
   };
 }
@@ -31,6 +33,41 @@ export const generateRandomVectors = (count: number, dim: number) => {
   return Array.from({ length: count }, () => {
     return Array.from({ length: dim }, () => Math.random() * 2 - 1);
   });
+};
+
+export const generateClusteredVectors = (count: number, dim: number, numClusters: number = 10) => {
+  // Generate cluster centers
+  const centers = Array.from({ length: numClusters }, () => Array.from({ length: dim }, () => Math.random() * 2 - 1));
+
+  // Generate vectors around centers with varying spread
+  return Array.from({ length: count }, () => {
+    // Pick a random cluster, with some clusters being more popular
+    const centerIdx = Math.floor(Math.pow(Math.random(), 2) * numClusters);
+    const center = centers[centerIdx] as number[];
+
+    // Add noise, with some vectors being further from centers
+    const spread = Math.random() < 0.8 ? 0.1 : 0.5; // 80% close, 20% far
+    return center.map(c => c + (Math.random() * spread - spread / 2));
+  });
+};
+
+// Or even more extreme:
+export const generateSkewedVectors = (count: number, dim: number) => {
+  // Create dense clusters with sparse regions
+  const vectors: number[][] = [];
+
+  // Dense cluster (60% of vectors)
+  const denseCenter = Array.from({ length: dim }, () => Math.random() * 0.2);
+  for (let i = 0; i < count * 0.6; i++) {
+    vectors.push(denseCenter.map(c => c + (Math.random() * 0.1 - 0.05)));
+  }
+
+  // Scattered vectors (40%)
+  for (let i = 0; i < count * 0.4; i++) {
+    vectors.push(Array.from({ length: dim }, () => Math.random() * 2 - 1));
+  }
+
+  return vectors.sort(() => Math.random() - 0.5); // Shuffle
 };
 
 export const findNearestBruteForce = (query: number[], vectors: number[][], k: number) => {
@@ -133,13 +170,12 @@ export const baseTestConfigs = {
   basicTests: {
     dimension: [
       { dimension: 64, size: 10_000, k: 10, queryCount: 15 },
-      { dimension: 256, size: 10_000, k: 10, queryCount: 15 },
       { dimension: 384, size: 10_000, k: 10, queryCount: 15 },
       { dimension: 1024, size: 10_000, k: 10, queryCount: 15 },
-      { dimension: 768, size: 10_000, k: 10, queryCount: 15 },
     ],
 
     size: [
+      { dimension: 384, size: 100_000, k: 10, queryCount: 10 },
       { dimension: 384, size: 500_000, k: 10, queryCount: 10 },
       { dimension: 384, size: 1_000_000, k: 10, queryCount: 5 },
     ],
@@ -151,14 +187,6 @@ export const baseTestConfigs = {
       { dimension: 384, size: 100_000, k: 100, queryCount: 5 },
     ],
   },
-
-  practicalTests: [
-    { dimension: 512, size: 100_000, k: 10, queryCount: 10 },
-
-    // Multi-modal
-    { dimension: 1024, size: 100_000, k: 20, queryCount: 10 },
-  ],
-
   stressTests: [
     // Maximum load
     { dimension: 512, size: 1_000_000, k: 50, queryCount: 5 },
@@ -184,12 +212,11 @@ export async function warmupQuery(vectorDB: PgVector, indexName: string, dimensi
   await vectorDB.query(indexName, warmupVector, k);
 }
 
-export async function measureLatency(fn: () => Promise<any>): Promise<number> {
-  const start = process.hrtime.bigint();
-  return fn().then(() => {
-    const end = process.hrtime.bigint();
-    return Number(end - start) / 1e6;
-  });
+export async function measureLatency<T>(fn: () => Promise<T>): Promise<[number, T]> {
+  const start = performance.now();
+  const result = await fn();
+  const end = performance.now();
+  return [end - start, result];
 }
 
 export const getListCount = (result: TestResult): number | undefined => {
@@ -199,24 +226,6 @@ export const getListCount = (result: TestResult): number | undefined => {
   }
   return result.indexConfig.ivf?.lists ?? Math.floor(Math.sqrt(result.size));
 };
-
-export function getIndexDescription(indexConfig: IndexConfig): string {
-  if (indexConfig.type === 'hnsw') {
-    return `HNSW(m=${indexConfig.hnsw?.m},ef=${indexConfig.hnsw?.efConstruction})`;
-  }
-
-  if (indexConfig.type === 'ivfflat') {
-    if (typeof indexConfig.ivf?.lists === 'function') {
-      return 'IVF(N/10)';
-    }
-    if (indexConfig.ivf?.lists) {
-      return `IVF(lists=${indexConfig.ivf.lists})`;
-    }
-    return 'IVF(dynamic)';
-  }
-
-  return 'Flat';
-}
 
 export function getSearchEf(k: number, m: number) {
   return {

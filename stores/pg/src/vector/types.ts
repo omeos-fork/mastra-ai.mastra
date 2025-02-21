@@ -2,6 +2,7 @@ export type IndexType = 'ivfflat' | 'hnsw' | 'flat';
 
 interface IVFConfig {
   lists?: number;
+  dynamic?: boolean;
 }
 
 interface HNSWConfig {

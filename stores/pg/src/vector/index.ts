@@ -18,6 +18,7 @@ export interface PGIndexStats extends IndexStats {
 
 export class PgVector extends MastraVector {
   private pool: pg.Pool;
+  private indexCache: Map<string, PGIndexStats> = new Map();
 
   constructor(connectionString: string) {
     super();
@@ -46,6 +47,13 @@ export class PgVector extends MastraVector {
     return translatedFilter;
   }
 
+  async getIndexInfo(indexName: string): Promise<PGIndexStats> {
+    if (!this.indexCache.has(indexName)) {
+      this.indexCache.set(indexName, await this.describeIndex(indexName));
+    }
+    return this.indexCache.get(indexName)!;
+  }
+
   async query(
     indexName: string,
     queryVector: number[],
@@ -65,7 +73,7 @@ export class PgVector extends MastraVector {
       const { sql: filterQuery, values: filterValues } = buildFilterQuery(translatedFilter, minScore);
 
       // Get index type and configuration
-      const indexInfo = await this.describeIndex(indexName);
+      const indexInfo = await this.getIndexInfo(indexName);
 
       // Set HNSW search parameter if applicable
       if (indexInfo.type === 'hnsw') {
@@ -222,7 +230,11 @@ export class PgVector extends MastraVector {
           )
         `;
       } else {
-        const lists = indexConfig.ivf?.lists ?? 100; // Default to 100 lists
+        let lists = indexConfig.ivf?.lists ?? 100;
+        if (indexConfig.ivf?.dynamic) {
+          const size = (await client.query(`SELECT COUNT(*) FROM ${indexName}`)).rows[0].count;
+          lists = Math.floor(Math.sqrt(size));
+        }
 
         indexSQL = `
           CREATE INDEX ${indexName}_vector_idx
@@ -233,17 +245,25 @@ export class PgVector extends MastraVector {
       }
 
       await client.query(indexSQL);
+      this.indexCache.delete(indexName);
     } finally {
       client.release();
     }
   }
 
-  async reoptimizeIndex(indexName: string): Promise<void> {
+  async rebuildIndex(indexName: string, newConfig?: IndexConfig): Promise<void> {
     const indexInfo = await this.describeIndex(indexName);
-    await this.configureIndex(indexName, indexInfo.metric, {
+    const config: IndexConfig = newConfig ?? {
       type: indexInfo.type as 'ivfflat' | 'hnsw' | 'flat',
       ...(indexInfo.type === 'hnsw' ? { hnsw: indexInfo.config } : { ivf: { lists: indexInfo.config?.lists } }),
-    });
+    };
+    // Validate that new config matches index type
+    if (newConfig && newConfig.type !== indexInfo.type) {
+      throw new Error(
+        `Cannot change index type during rebuild. Current: ${indexInfo.type}, Requested: ${newConfig.type}`,
+      );
+    }
+    await this.configureIndex(indexName, indexInfo.metric, config);
   }
 
   async listIndexes(): Promise<string[]> {
