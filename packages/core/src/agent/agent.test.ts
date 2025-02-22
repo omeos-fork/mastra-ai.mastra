@@ -1,6 +1,5 @@
 import { createOpenAI } from '@ai-sdk/openai';
 import { config } from 'dotenv';
-import path from 'path';
 import { PassThrough } from 'stream';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { z } from 'zod';
@@ -281,7 +280,7 @@ describe('agent', () => {
 
   describe('voice capabilities', () => {
     class MockVoice extends MastraVoice {
-      async speak(input: string | NodeJS.ReadableStream): Promise<NodeJS.ReadableStream> {
+      async speak(_input: string | NodeJS.ReadableStream): Promise<NodeJS.ReadableStream> {
         const stream = new PassThrough();
         stream.end('mock audio');
         return stream;
