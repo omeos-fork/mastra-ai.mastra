@@ -278,6 +278,7 @@ export class WorkflowInstance<TSteps extends Step<any, any, any>[] = any, TTrigg
     delete prevSnapshot.trigger;
     const snapshot = { ...trigger, childStates: prevSnapshot };
 
+    // TODO: really patch the state together here
     const m = getActivePathsAndStatus(prevSnapshot.value as Record<string, any>);
     return {
       runId: this.runId,
