@@ -1,7 +1,5 @@
 import type { Span } from '@opentelemetry/api';
-import { get } from 'radash';
-import sift from 'sift';
-import { createActor, type Snapshot, setup, assign, type MachineContext, fromPromise } from 'xstate';
+import { type Snapshot } from 'xstate';
 import type { z } from 'zod';
 
 import type { IAction, MastraPrimitives } from '../action';
@@ -9,34 +7,8 @@ import type { Logger } from '../logger';
 
 import { Machine } from './machine';
 import { Step } from './step';
-import type {
-  DependencyCheckOutput,
-  ResolverFunctionInput,
-  ResolverFunctionOutput,
-  RetryConfig,
-  StepCondition,
-  StepDef,
-  StepGraph,
-  StepNode,
-  StepResult,
-  StepVariableType,
-  WorkflowActionParams,
-  WorkflowActions,
-  WorkflowActors,
-  WorkflowContext,
-  WorkflowEvent,
-  WorkflowRunState,
-  WorkflowState,
-} from './types';
-import {
-  getActivePathsAndStatus,
-  getStepResult,
-  getSuspendedPaths,
-  isErrorEvent,
-  isTransitionEvent,
-  mergeChildValue,
-  recursivelyCheckForFinalState,
-} from './utils';
+import type { RetryConfig, StepGraph, StepResult, WorkflowRunState } from './types';
+import { getActivePathsAndStatus } from './utils';
 
 export interface WorkflowResultReturn<T extends z.ZodType<any>> {
   runId: string;

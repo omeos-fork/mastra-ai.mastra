@@ -119,3 +119,24 @@ export function mergeChildValue(parent: Record<string, any>, child: Record<strin
 
   return traverse(parent);
 }
+
+export const updateStepInHierarchy = (value: Record<string, any>, targetStepId: string): Record<string, any> => {
+  const result: Record<string, any> = {};
+
+  for (const key of Object.keys(value)) {
+    const currentValue = value[key];
+
+    if (key === targetStepId) {
+      // Found our target step, set it to pending
+      result[key] = 'pending';
+    } else if (typeof currentValue === 'object' && currentValue !== null) {
+      // Recurse into nested states
+      result[key] = updateStepInHierarchy(currentValue, targetStepId);
+    } else {
+      // Keep other states as is
+      result[key] = currentValue;
+    }
+  }
+
+  return result;
+};
