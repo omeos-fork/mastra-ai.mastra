@@ -175,6 +175,7 @@ export class WorkflowInstance<TSteps extends Step<any, any, any>[] = any, TTrigg
         machine.on('suspend', ({ stepId }) => {
           console.log('suspend event caught', { stepId });
           this.#suspendedMachines[stepId] = machine;
+          this.persistWorkflowSnapshot();
         });
 
         machine.on('spawn-subscriber', spawnHandler);
