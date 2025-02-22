@@ -154,7 +154,7 @@ export class WorkflowInstance<TSteps extends Step<any, any, any>[] = any, TTrigg
     this.#machines[startStepId] = defaultMachine;
 
     const nestedMachines: Promise<any>[] = [];
-    defaultMachine.on('spawn-subscriber', ({ parentStepId, context }) => {
+    const spawnHandler = ({ parentStepId, context }: { parentStepId: string; context: any }) => {
       if (this.#stepSubscriberGraph[parentStepId]) {
         const machine = new Machine({
           logger: this.logger,
@@ -174,9 +174,13 @@ export class WorkflowInstance<TSteps extends Step<any, any, any>[] = any, TTrigg
           this.#suspendedMachines[stepId] = machine;
         });
 
+        machine.on('spawn-subscriber', spawnHandler);
+
         nestedMachines.push(machine.execute({ input: context }));
       }
-    });
+    };
+
+    defaultMachine.on('spawn-subscriber', spawnHandler);
 
     defaultMachine.on('suspend', ({ stepId }) => {
       console.log('suspend event caught', { stepId });
