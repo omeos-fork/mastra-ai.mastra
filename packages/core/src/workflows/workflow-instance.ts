@@ -135,6 +135,8 @@ export class WorkflowInstance<TSteps extends Step<any, any, any>[] = any, TTrigg
       if (stepId && runState?.suspendedSteps?.[stepId]) {
         stepGraph = this.#stepSubscriberGraph[runState.suspendedSteps[stepId]] ?? this.#stepGraph;
         startStepId = stepId;
+
+        delete this.#suspendedMachines[stepId];
       }
     }
 
