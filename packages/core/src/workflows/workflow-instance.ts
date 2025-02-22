@@ -156,6 +156,7 @@ export class WorkflowInstance<TSteps extends Step<any, any, any>[] = any, TTrigg
     const nestedMachines: Promise<any>[] = [];
     const spawnHandler = ({ parentStepId, context }: { parentStepId: string; context: any }) => {
       if (this.#stepSubscriberGraph[parentStepId]) {
+        console.log('spawning subscriber', { parentStepId, context });
         const machine = new Machine({
           logger: this.logger,
           mastra: this.#mastra,
@@ -242,17 +243,42 @@ export class WorkflowInstance<TSteps extends Step<any, any, any>[] = any, TTrigg
   }
 
   async getState(): Promise<WorkflowRunState | null> {
-    // TODO: get and patch together state of all machines
-    if (!this.#machines['trigger']) {
-      return null;
-    }
+    const storedSnapshot = await this.#mastra?.storage?.loadWorkflowSnapshot({
+      workflowName: this.name,
+      runId: this.runId,
+    });
+    const prevSnapshot: Record<string, WorkflowRunState> = storedSnapshot
+      ? {
+          trigger: storedSnapshot,
+          ...Object.entries(storedSnapshot?.childStates ?? {}).reduce(
+            (acc, [stepId, snapshot]) => ({ ...acc, [stepId]: snapshot as WorkflowRunState }),
+            {},
+          ),
+        }
+      : ({} as Record<string, WorkflowRunState>);
 
-    const snapshot = this.#machines['trigger'].getSnapshot();
-    if (!snapshot) {
-      return null;
-    }
+    const currentSnapshot = Object.entries(this.#machines).reduce(
+      (acc, [stepId, machine]) => {
+        const snapshot = machine.getSnapshot();
+        if (!snapshot) {
+          return acc;
+        }
 
-    const m = getActivePathsAndStatus(snapshot.value as Record<string, any>);
+        return {
+          ...acc,
+          [stepId]: snapshot as unknown as WorkflowRunState,
+        };
+      },
+      {} as Record<string, WorkflowRunState>,
+    );
+
+    Object.assign(prevSnapshot, currentSnapshot);
+
+    const trigger = prevSnapshot.trigger as unknown as WorkflowRunState;
+    delete prevSnapshot.trigger;
+    const snapshot = { ...trigger, childStates: prevSnapshot };
+
+    const m = getActivePathsAndStatus(prevSnapshot.value as Record<string, any>);
     return {
       runId: this.runId,
       value: snapshot.value as Record<string, string>,

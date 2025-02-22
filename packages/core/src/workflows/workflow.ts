@@ -410,6 +410,7 @@ export class Workflow<
       };
     }
 
+    console.dir({ parsedSnapshot }, { depth: null });
     // Reattach the step handler
     // TODO: need types
     if (parsedSnapshot.children) {
