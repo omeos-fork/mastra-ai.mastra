@@ -230,6 +230,8 @@ export class Machine<
       this.#actor.stop();
       this.#actor = null;
     }
+
+    this.removeAllListeners();
   }
 
   #makeDelayMap() {
